@@ -16,11 +16,29 @@ public final class LiveOwnerProbe extends JavaPlugin {
     private volatile boolean running;
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof ConsoleCommandSender)) return false;
+        if (command.getName().equals("probedisable")) {
+            var target = Bukkit.getPluginManager().getPlugin("InvSeePlusPlusFolia");
+            Bukkit.getGlobalRegionScheduler().execute(this, () -> {
+                Bukkit.getPluginManager().disablePlugin(target);
+                getLogger().info("PROBE DISABLED production plugin; verify stale menus close and cannot mutate");
+            });
+            return true;
+        }
         if (command.getName().equals("probepermission") && args.length == 3) {
             Player player = Bukkit.getPlayerExact(args[0]);
             if (player == null) return false;
             owned(player, () -> { player.addAttachment(this, args[1], Boolean.parseBoolean(args[2])); return true; })
                 .whenComplete((v,e) -> getLogger().info("Permission test attachment: " + (e == null ? "applied" : e)));
+            return true;
+        }
+        if (command.getName().equals("equipmentcheck")) {
+            var plugin = Bukkit.getPluginManager().getPlugin("InvSeePlusPlusFolia");
+            Bukkit.getAsyncScheduler().runNow(this, ignored -> {
+                try {
+                    Object report = plugin.getClass().getClassLoader().loadClass("com.janboerman.invsee.folia.EquipmentRuntimeChecks").getMethod("run").invoke(null);
+                    getLogger().info("EQUIPMENT: " + report);
+                } catch (Throwable e) { getLogger().log(java.util.logging.Level.SEVERE, "EQUIPMENT FAILED", e); }
+            });
             return true;
         }
         if (command.getName().equals("codeccheck")) {

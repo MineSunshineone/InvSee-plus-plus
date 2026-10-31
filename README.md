@@ -1,5 +1,7 @@
 # InvSee++
 
+> **Folia 26.2 / 26.3 开发分支**：本 fork 的 Folia 实现位于 [InvSee++_Folia](InvSee++_Folia/README.zh-CN.md)，与下方介绍的上游传统实现分开构建。当前仍在补齐功能和验收，不应视为正式发布版；旧版 API、附属插件及下文所有功能不能直接视为 Folia 兼容。参见 [构建说明](InvSee++_Folia/BUILDING.md) 和 [测试记录](test-harness/LIVE_RESULTS.md)。
+
 A bukkit plugin for manipulating player inventories.
 
 ![Logo](https://github.com/Jannyboy11/InvSee-plus-plus/blob/master/img/invsee6.png?raw=true)

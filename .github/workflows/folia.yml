@@ -6,7 +6,7 @@ on:
     branches: ['folia-*']
   pull_request:
     paths:
-      - 'InvSee++_Folia/**'
+      - 'InvSee\+\+_Folia/**'
       - '.github/workflows/folia.yml'
       - 'pom.xml'
 

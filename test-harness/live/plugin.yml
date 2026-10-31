@@ -13,3 +13,9 @@ commands:
   probepermission:
     description: Console-only disposable player permission test attachment
     usage: probepermission player node true-or-false
+  probedisable:
+    description: Console-only disable production plugin for isolated stale-menu test
+    usage: probedisable
+  equipmentcheck:
+    description: Console-only native equipment component runtime checks
+    usage: equipmentcheck
