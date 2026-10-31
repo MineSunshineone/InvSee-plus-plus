@@ -1,0 +1,15 @@
+name: InvSeeLiveOwnerProbe
+version: 0.1
+main: harness.LiveOwnerProbe
+api-version: '26.2'
+folia-supported: true
+commands:
+  ownerprobe:
+    description: Console only - three disposable connected players in distinct regions, empty slot 0
+    usage: ownerprobe playerA playerB playerC
+  codeccheck:
+    description: Console-only initialized-server offline codec acceptance check
+    usage: codeccheck
+  probepermission:
+    description: Console-only disposable player permission test attachment
+    usage: probepermission player node true-or-false

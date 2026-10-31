@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.janboerman.invsee</groupId>
+    <artifactId>invsee-plus-plus</artifactId>
+    <version>0.31.23-SNAPSHOT</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>invsee-plus-plus_folia</artifactId>
+  <name>InvSee++ isolated Folia implementation</name>
+  <description>Experimental transactional inventory editing for Folia 26.2.</description>
+  <properties>
+    <paper.version>26.2.build.99-stable</paper.version>
+    <paper-nms-maven-plugin.version>1.4.11-SNAPSHOT</paper-nms-maven-plugin.version>
+    <maven.compiler.release>25</maven.compiler.release>
+  </properties>
+  <repositories>
+    <repository>
+      <id>papermc</id>
+      <url>https://repo.papermc.io/repository/maven-public/</url>
+    </repository>
+  </repositories>
+  <dependencies>
+    <dependency>
+      <groupId>io.papermc.paper</groupId>
+      <artifactId>paper-api</artifactId>
+      <version>${paper.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>ca.bkaw</groupId>
+      <artifactId>paper-nms</artifactId>
+      <version>${paper.version}-SNAPSHOT</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <finalName>InvSee++-Folia-experimental</finalName>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${maven-compiler-plugin.version}</version>
+        <configuration><release>25</release></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${maven-surefire-plugin.version}</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>${maven-jar-plugin.version}</version>
+      </plugin>
+    </plugins>
+  </build>
+  <profiles>
+    <!-- Explicit opt-in bootstrap. Fetches/executes a third-party plugin.
+         Review/approve its source before invoking this profile's init goal. -->
+    <profile>
+      <id>nms-bootstrap</id>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>bytecode.space</id>
+          <url>https://repo.bytecode.space/repository/maven-public/</url>
+        </pluginRepository>
+      </pluginRepositories>
+      <build><plugins><plugin>
+        <groupId>ca.bkaw</groupId>
+        <artifactId>paper-nms-maven-plugin</artifactId>
+        <version>${paper-nms-maven-plugin.version}</version>
+      </plugin></plugins></build>
+    </profile>
+  </profiles>
+</project>

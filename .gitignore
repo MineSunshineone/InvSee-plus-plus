@@ -6,6 +6,8 @@
 
 #Maven
 target/*
+**/target/
+.ci/
 
 #paper-nms-maven-plugin
 **/.paper-nms

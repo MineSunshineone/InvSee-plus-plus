@@ -1,6 +1,9 @@
 package com.janboerman.invsee.spigot.api;
 
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
+import java.util.function.Supplier;
 
 /**
  * Scheduler abstraction for scheduling tasks.
@@ -15,6 +18,26 @@ public interface Scheduler {
     //TODO  - apply the changes to the player's inventory
     //TODO  - save the player data again.
     public void executeSyncPlayer(UUID playerId, Runnable task, Runnable retired);
+
+    /**
+     * Schedule a value-producing operation without leaving its future unresolved if
+     * an entity retires before dispatch. The operation must not access another entity.
+     * For an absent UUID, implementations may dispatch on the global scheduler;
+     * callers must revalidate offline state before accessing player data.
+     */
+    default <T> CompletableFuture<T> supplySyncPlayer(UUID playerId, Supplier<T> operation) {
+        CompletableFuture<T> result = new CompletableFuture<>();
+        try {
+            executeSyncPlayer(playerId, () -> {
+                if (result.isDone()) return;
+                try { result.complete(operation.get()); }
+                catch (Throwable error) { result.completeExceptionally(error); }
+            }, () -> result.completeExceptionally(new CancellationException("Player retired before scheduled operation")));
+        } catch (Throwable error) {
+            result.completeExceptionally(error);
+        }
+        return result;
+    }
 
     public void executeSyncGlobal(Runnable task);
 

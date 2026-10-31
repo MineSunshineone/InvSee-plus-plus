@@ -1,0 +1,47 @@
+name: InvSeePlusPlusFolia
+main: com.janboerman.invsee.folia.FoliaInvSeePlugin
+version: ${project.version}
+description: ${project.description}
+api-version: '26.2'
+prefix: InvSee++ Folia
+# Deliberately blocked until real Folia integration acceptance is complete.
+folia-supported: false
+# Ensure the legacy plugin is loaded first so the new implementation can refuse
+# simultaneous activation. This is NOT compatibility with the legacy API.
+softdepend: [InvSeePlusPlus]
+commands:
+  invsee:
+    description: View a player's inventory using an isolated transaction session
+    permission: invseeplusplus.invsee.view
+    usage: /invsee <online-name|UUID>
+  endersee:
+    description: View a player's ender chest using an isolated transaction session
+    permission: invseeplusplus.endersee.view
+    usage: /endersee <online-name|UUID>
+  invseerecovery:
+    description: List quarantined transactions without automatically replaying them
+    permission: invseeplusplus.recovery
+    usage: /invseerecovery
+permissions:
+  invseeplusplus.invsee.view:
+    default: op
+  invseeplusplus.invsee.edit:
+    default: op
+    children:
+      invseeplusplus.invsee.view: true
+  invseeplusplus.endersee.view:
+    default: op
+  invseeplusplus.endersee.edit:
+    default: op
+    children:
+      invseeplusplus.endersee.view: true
+  invseeplusplus.exempt.invsee:
+    default: false
+  invseeplusplus.exempt.endersee:
+    default: false
+  invseeplusplus.bypass-exempt.invsee:
+    default: false
+  invseeplusplus.bypass-exempt.endersee:
+    default: false
+  invseeplusplus.recovery:
+    default: op

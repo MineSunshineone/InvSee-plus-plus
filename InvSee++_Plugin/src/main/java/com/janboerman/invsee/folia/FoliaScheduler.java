@@ -9,6 +9,8 @@ import org.bukkit.entity.Player;
 
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Scheduler implementation based on {@link io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler},
@@ -16,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class FoliaScheduler implements Scheduler {
 
-    private InvseePlusPlus plugin;
+    private final InvseePlusPlus plugin;
 
     public FoliaScheduler(InvseePlusPlus plugin) {
         this.plugin = plugin;
@@ -27,15 +29,25 @@ public class FoliaScheduler implements Scheduler {
         Server server = plugin.getServer();
         Player player = server.getPlayer(playerId);
         if (player != null) {
-            EntityScheduler scheduler = player.getScheduler();
-            scheduler.run(plugin, scheduledTask -> task.run(), retired);
+            executeSyncPlayer(player, task, retired);
         } else {
             executeSyncGlobal(task);
         }
     }
 
     public void executeSyncPlayer(HumanEntity player, Runnable task, Runnable retired) {
-        player.getScheduler().run(plugin, scheduledTask -> task.run(), retired);
+        // run() returns null for an already retired entity; that path does not
+        // promise to call the retirement callback. Arbitrate both paths once.
+        AtomicBoolean dispatched = new AtomicBoolean();
+        Runnable onRetired = () -> {
+            if (dispatched.compareAndSet(false, true) && retired != null) retired.run();
+        };
+        if (player.getScheduler().run(plugin, scheduledTask -> {
+            if (dispatched.compareAndSet(false, true)) task.run();
+        }, onRetired) == null) {
+            onRetired.run();
+            if (retired == null) throw new RejectedExecutionException("Player entity is retired");
+        }
     }
 
     @Override
@@ -45,7 +57,7 @@ public class FoliaScheduler implements Scheduler {
 
     @Override
     public void executeSyncGlobalRepeatedly(Runnable task, long ticksInitialDelay, long ticksPeriod) {
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, scheduledTask -> task.run(), ticksInitialDelay, ticksPeriod);
+        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, scheduledTask -> task.run(), Math.max(1L, ticksInitialDelay), ticksPeriod);
     }
 
     @Override
@@ -55,7 +67,7 @@ public class FoliaScheduler implements Scheduler {
 
     @Override
     public void executeLaterGlobal(Runnable task, long delayTicks) {
-        plugin.getServer().getGlobalRegionScheduler().runDelayed(plugin, scheduledTask -> task.run(), delayTicks);
+        plugin.getServer().getGlobalRegionScheduler().runDelayed(plugin, scheduledTask -> task.run(), Math.max(1L, delayTicks));
     }
 
     @Override
