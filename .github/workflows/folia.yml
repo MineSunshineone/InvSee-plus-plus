@@ -51,9 +51,10 @@ jobs:
           mkdir -p .ci/folia
           curl --fail --location --retry 2 --max-time 180             -H "User-Agent: InvSeeFoliaCI/1.0 (https://github.com/MineSunshineone/InvSee-plus-plus)"             "https://fill-data.papermc.io/v1/objects/$EXPECTED_SHA256/folia-$MC_VERSION-$BUILD.jar"             -o .ci/folia/server.jar
           echo "$EXPECTED_SHA256  .ci/folia/server.jar" | sha256sum --check
-          curl --fail --location --retry 2 --max-time 60             https://repo.maven.apache.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar             -o .ci/junit-console.jar
+          # Maven Central may rate-limit shared hosted-runner IPs; back off, never skip hashes.
+          curl --fail --location --retry 6 --retry-delay 20 --retry-max-time 300 --connect-timeout 15 --max-time 60             https://repo.maven.apache.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar             -o .ci/junit-console.jar
           echo "a1de557821293ce903c213c694165fff532cf92081bac4238b9e05b35f04f43f  .ci/junit-console.jar" | sha256sum --check
-          curl --fail --location --retry 2 --max-time 60             https://repo.maven.apache.org/maven2/org/jetbrains/annotations/26.0.2/annotations-26.0.2.jar             -o .ci/annotations.jar
+          curl --fail --location --retry 6 --retry-delay 20 --retry-max-time 300 --connect-timeout 15 --max-time 60             https://repo.maven.apache.org/maven2/org/jetbrains/annotations/26.0.2/annotations-26.0.2.jar             -o .ci/annotations.jar
           echo "2037be378980d3ba9333e97955f3b2cde392aa124d04ca73ce2eee6657199297  .ci/annotations.jar" | sha256sum --check
       - name: Materialize official server dependencies, then stop
         shell: bash
