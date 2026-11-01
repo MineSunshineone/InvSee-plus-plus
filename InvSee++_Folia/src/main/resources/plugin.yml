@@ -4,8 +4,8 @@ version: ${project.version}
 description: ${project.description}
 api-version: '26.2'
 prefix: InvSee++ Folia
-# Deliberately blocked until real Folia integration acceptance is complete.
-folia-supported: false
+# Enabled after isolated acceptance on the explicitly supported Folia builds.
+folia-supported: true
 # Ensure the legacy plugin is loaded first so the new implementation can refuse
 # simultaneous activation. This is NOT compatibility with the legacy API.
 softdepend: [InvSeePlusPlus]

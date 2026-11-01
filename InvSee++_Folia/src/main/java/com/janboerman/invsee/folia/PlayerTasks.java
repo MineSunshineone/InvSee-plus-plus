@@ -22,6 +22,38 @@ final class PlayerTasks {
         for (CompletableFuture<?> future : pending) future.completeExceptionally(new CancellationException("Plugin stopping; owner operation outcome must be reviewed"));
         return drained;
     }
+    /** Global ownership is only for console/RCON state, never player inventory access. */
+    static <T> CompletableFuture<T> callGlobal(JavaPlugin plugin, Supplier<T> action) {
+        return callGlobal(plugin.getServer().getGlobalRegionScheduler(), plugin, action);
+    }
+    static <T> CompletableFuture<T> callGlobal(io.papermc.paper.threadedregions.scheduler.GlobalRegionScheduler scheduler,
+                                               org.bukkit.plugin.Plugin plugin, Supplier<T> action) {
+        if (stopped) return CompletableFuture.failedFuture(new NotExecutedException("Plugin stopping"));
+        CompletableFuture<T> result = new CompletableFuture<>();
+        pending.add(result);
+        result.whenComplete((value, error) -> pending.remove(result));
+        if (stopped) { result.completeExceptionally(new NotExecutedException("Plugin stopping")); return result; }
+        AtomicBoolean claimed = new AtomicBoolean();
+        try {
+            scheduler.execute(plugin, () -> {
+                if (!claimed.compareAndSet(false, true) || result.isDone()) return;
+                synchronized (lifecycle) {
+                    if (stopped || result.isDone()) return;
+                    active++;
+                }
+                try { result.complete(action.get()); }
+                catch (Throwable error) { result.completeExceptionally(error); }
+                finally { synchronized (lifecycle) { if (--active == 0 && stopped) drained.complete(null); } }
+            });
+        } catch (Throwable error) {
+            // Claim a not-yet-started callback so an accepted-but-rejected task
+            // cannot execute later after we report a definitive non-operation.
+            if (claimed.compareAndSet(false, true)) result.completeExceptionally(new NotExecutedException("Global task rejected: " + error));
+            else result.completeExceptionally(error);
+        }
+        return result;
+    }
+
     static <T> CompletableFuture<T> call(JavaPlugin plugin, Player player, Supplier<T> action) {
         CompletableFuture<T> result = new CompletableFuture<>();
         if (stopped) return CompletableFuture.failedFuture(new NotExecutedException("Plugin stopping"));

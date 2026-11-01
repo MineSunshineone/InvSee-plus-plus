@@ -95,10 +95,21 @@ author's retained implementation history after the workspace rollback. Commit
 `9307c134` is the new reconstruction, not a claim of byte-identical restoration of
 the lost parity commits. Current revalidation: offline production and tests compile
 against the official 26.2 and 26.3 runtimes; all 21 offline-package JUnit tests pass
-on each (14 persistence/snapshot tests plus seven name-resolver tests). New
-initialized-server tests must be rerun on the reconstructed integrated artifact.
-The older runtime evidence below describes the historical baseline, not the new
-reconstruction's runtime status.
+on each (14 persistence/snapshot tests plus seven name-resolver tests).
+
+Fresh initialized-server codec and storage checks, including the reconstructed
+whole-inventory patch/clear tests, passed on 2026-11-01 at 01:18:42 UTC on Folia
+26.2 and 01:25:20 UTC on Folia 26.3. Both used the same 26.2-compiled candidate
+with canonical SHA-256
+`479aa40ac35a18425463965adba66b15368113df449f4dbe61a02a4d0dc72b44`.
+The storage checks cover populated armor/offhand/body/saddle clearing, main/ender
+preservation, all-slot stale rejection, durable whole-inventory verification and
+acknowledgement, along with admission/profile-change/reallow and bounded-drain
+regressions. The complete module also passed 101 unit tests against each runtime.
+These scoped offline results do not substitute for the whole plugin's GUI and
+administrative-command acceptance matrix.
+
+The older runtime evidence below describes the historical baseline separately.
 
 ## Exact current layout
 

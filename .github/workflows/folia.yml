@@ -98,7 +98,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           path: |
-            InvSee++_Folia/target/InvSee++-Folia-experimental.jar
+            InvSee++_Folia/target/InvSee++-Folia.jar
             InvSee++_Folia/target/runtime-build/tests.log
             InvSee++_Folia/target/runtime-build/*sha256.txt
             InvSee++_Folia/target/runtime-build/java-version.txt

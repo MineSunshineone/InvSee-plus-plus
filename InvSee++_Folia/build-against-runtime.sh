@@ -29,7 +29,7 @@ python3 - "$MODULE" "$OUT/classes" <<'PY'
 import pathlib,sys,xml.etree.ElementTree as ET
 module,out=map(pathlib.Path,sys.argv[1:])
 root=ET.parse(module/'pom.xml').getroot(); ns={'m':'http://maven.apache.org/POM/4.0.0'}
-version=root.findtext('m:parent/m:version',namespaces=ns)
+version=root.findtext('m:version',namespaces=ns) or root.findtext('m:parent/m:version',namespaces=ns)
 description=root.findtext('m:description',namespaces=ns)
 for src in (module/'src/main/resources').rglob('*'):
     if src.is_file():
@@ -41,5 +41,5 @@ if [[ -s "$OUT/test-sources.txt" ]]; then
   "$JAVA/javac" --release 25 -encoding UTF-8 -cp "$OUT/classes:$CP:$JUNIT" -d "$OUT/test-classes" @"$OUT/test-sources.txt"
   "$JAVA/java" -jar "$JUNIT" execute --class-path "$OUT/classes:$OUT/test-classes:$CP" --scan-class-path="$OUT/test-classes" --fail-if-no-tests --disable-ansi-colors | tee "$OUT/tests.log"
 fi
-"$JAVA/jar" --create --file "$MODULE/target/InvSee++-Folia-experimental.jar" -C "$OUT/classes" .
-echo "Built $MODULE/target/InvSee++-Folia-experimental.jar"
+"$JAVA/jar" --create --file "$MODULE/target/InvSee++-Folia.jar" -C "$OUT/classes" .
+echo "Built $MODULE/target/InvSee++-Folia.jar"

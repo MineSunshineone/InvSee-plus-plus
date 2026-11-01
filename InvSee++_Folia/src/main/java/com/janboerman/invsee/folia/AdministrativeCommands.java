@@ -148,8 +148,7 @@ final class AdministrativeCommands implements CommandExecutor {
             return sender.hasPermission("invseeplusplus.bypass-exempt." + (ender ? "endersee" : "invsee"));
         };
         if (sender instanceof Player player) return PlayerTasks.call(plugin, player, check);
-        try { return CompletableFuture.completedFuture(check.get()); }
-        catch (RuntimeException error) { return CompletableFuture.failedFuture(error); }
+        return PlayerTasks.callGlobal(plugin, check);
     }
     private CompletableFuture<Boolean> authorize(CommandSender sender, String permission, boolean ender, boolean requireBypass) {
         return permissions(sender, permission, ender).handle((bypass, error) -> {

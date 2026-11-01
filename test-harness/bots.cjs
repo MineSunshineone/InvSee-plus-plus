@@ -51,7 +51,7 @@ async function race() {
   if (count(bots[0]) !== 64 || count(a) || count(b)) throw Error('Require exactly64 diamonds on target and0 on viewers')
   const before = counts(); log('before-race',{counts:before})
   const source=a.currentWindow.slots.slice(0,54).findIndex(item=>item?.name==='diamond')
-  if(source<0 || b.currentWindow.slots[source]?.name!=='diamond')throw Error('No matching diamond source snapshot')
+  if(source<0 || a.currentWindow.slots[source]?.count!==64 || b.currentWindow.slots[source]?.name!=='diamond' || b.currentWindow.slots[source]?.count!==64)throw Error('Race requires one matching full64 diamond source stack; no clicks sent')
   await Promise.all([a.clickWindow(source,0,0),b.clickWindow(source,0,0)])
   await delay(150)
   const start=performance.now()

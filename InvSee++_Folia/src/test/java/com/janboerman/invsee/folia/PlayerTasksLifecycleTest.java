@@ -44,10 +44,30 @@ class PlayerTasksLifecycleTest {
         Fixture(){current=player;}
         void execute(){run.accept(task);}
     }
+    static final class GlobalFixture {
+        Runnable run;
+        boolean reject;
+        int schedulingCalls;
+        final GlobalRegionScheduler scheduler=proxy(GlobalRegionScheduler.class,(p,m,a)->{
+            if (!m.getName().equals("execute")) throw new AssertionError("Unexpected global method: "+m);
+            schedulingCalls++;
+            if (reject) throw new RejectedExecutionException("test rejection");
+            run=(Runnable)a[1]; return null;
+        });
+    }
     // One test owns the irreversible classloader-scoped shutdown; no reflective
     // reset or dependence on test ordering, and no production lifecycle bypass.
     @Test void retirementIdentityRejectionAndShutdownDrain() throws Exception {
         AtomicInteger actions=new AtomicInteger();
+        AtomicInteger globalActions=new AtomicInteger();
+        GlobalFixture global=new GlobalFixture();
+        var globalResult=PlayerTasks.callGlobal(global.scheduler,null,globalActions::incrementAndGet);
+        assertFalse(globalResult.isDone()); global.run.run(); global.run.run();
+        assertEquals(1,globalResult.join()); assertEquals(1,globalActions.get());
+        GlobalFixture globalRejected=new GlobalFixture(); globalRejected.reject=true;
+        assertThrows(CancellationException.class,()->PlayerTasks.callGlobal(globalRejected.scheduler,null,globalActions::incrementAndGet).join());
+        GlobalFixture globalQueued=new GlobalFixture();
+        var globalPending=PlayerTasks.callGlobal(globalQueued.scheduler,null,globalActions::incrementAndGet);
         Fixture retired=new Fixture();
         var r=PlayerTasks.call(null,retired.player,actions::incrementAndGet);
         retired.retired.run(); retired.execute();
@@ -70,6 +90,11 @@ class PlayerTasksLifecycleTest {
         CompletableFuture<Void> drained=PlayerTasks.stop();
         try {
             assertFalse(drained.isDone()); assertThrows(CancellationException.class,q::join);
+            assertThrows(CancellationException.class,globalPending::join);
+            globalQueued.run.run(); assertEquals(1,globalActions.get());
+            GlobalFixture globalAfter=new GlobalFixture();
+            assertThrows(CancellationException.class,()->PlayerTasks.callGlobal(globalAfter.scheduler,null,globalActions::incrementAndGet).join());
+            assertEquals(0,globalAfter.schedulingCalls);
             queued.execute(); assertEquals(1,actions.get());
             assertThrows(CancellationException.class,runningResult::join);
             Fixture after=new Fixture();assertThrows(CancellationException.class,()->PlayerTasks.call(null,after.player,actions::incrementAndGet).join());

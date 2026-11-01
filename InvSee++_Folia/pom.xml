@@ -9,8 +9,9 @@
     <relativePath>../pom.xml</relativePath>
   </parent>
   <artifactId>invsee-plus-plus_folia</artifactId>
+  <version>0.31.23-folia.1-rc1</version>
   <name>InvSee++ isolated Folia implementation</name>
-  <description>Experimental transactional inventory editing for Folia 26.2.</description>
+  <description>Transactional inventory editing for tested Folia 26.2 and 26.3 builds.</description>
   <properties>
     <paper.version>26.2.build.99-stable</paper.version>
     <paper-nms-maven-plugin.version>1.4.11-SNAPSHOT</paper-nms-maven-plugin.version>
@@ -43,7 +44,7 @@
     </dependency>
   </dependencies>
   <build>
-    <finalName>InvSee++-Folia-experimental</finalName>
+    <finalName>InvSee++-Folia</finalName>
     <resources>
       <resource>
         <directory>src/main/resources</directory>

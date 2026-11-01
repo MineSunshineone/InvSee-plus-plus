@@ -1,11 +1,15 @@
-# Isolated Folia 26.2 build
+# Isolated Folia 26.2 / 26.3 build
 
 This module is independent of the legacy adapter reactor. It does not implement
 the old InvSee++ API and must not run alongside the legacy plugin or its addons.
-It is **experimental**, not a verified release. Its committed plugin descriptor
-deliberately has `folia-supported: false` pending real integration acceptance.
+Release candidate **0.31.23-folia.1-rc1** enables Folia support after the scoped
+paired acceptance recorded in `../test-harness/PARITY_RESULTS.md`. This is not
+a blanket production-safety or future-version guarantee.
 
-Requirements: JDK 25, Maven 3.9+, and Python only if using external test scripts.
+Verified build path: JDK 25, Python 3, the exact bootstrapped official runtime,
+and the two Maven Central test libraries described below. The GitHub Actions
+workflow reproduces this path. Maven 3.9+ is optional; the legacy NMS bootstrap
+shown here is retained for diagnostics and currently fails for calendar versions.
 Run from the repository root:
 
 ```sh
@@ -20,8 +24,8 @@ mvn -f InvSee++_Folia/pom.xml clean verify
 ```
 
 The bootstrap uses Paper `26.2.build.99-stable`, pinned in this module's POM.
-The resulting jar is
-`InvSee++_Folia/target/InvSee++-Folia-experimental.jar`.
+The isolated build output is
+`InvSee++_Folia/target/InvSee++-Folia.jar`.
 Minecraft/Paper dependencies are provided by the server, not bundled.
 Do not use `mvn deploy` or publish this experimental artifact as production-ready.
 
@@ -35,7 +39,7 @@ Obtain Folia only from [PaperMC](https://papermc.io/downloads/folia).
 Record its exact version, build, source commit and SHA-256.
 
 A successful startup is **not** evidence of cross-region safety.
-Before changing the descriptor gate or claiming support, test at least:
+For additional versions or deployments, the acceptance checklist includes:
 
 - Two distinct player regions, simultaneous viewers and competing inventory changes.
 - Permission denial/revocation and exemptions; no edit through drag/hotbar/shift paths.
@@ -69,7 +73,7 @@ export JAVA_HOME=/absolute/path/to/jdk-25
 Obtain JUnit Console and JetBrains annotations 26.0.2 from Maven Central; version 1.10.2 matches the parent
 project's JUnit 5.10.2. The script compiles main/test sources, runs all module
 JUnit tests, filters resource version fields, and packages only module-owned
-classes/resources. It does **not** enable Folia support in the descriptor.
+classes/resources. It preserves the committed descriptor; it does not override the support gate.
 
 Test dependency baseline: Folia **26.2 build 7 BETA**, source commit
 `14b7fee5c866fca9a40ede4a58998fb928140f65`.
@@ -79,3 +83,21 @@ The script records Java version and extracted-server/JUnit checksums under
 `target/runtime-build/`. Keep the original download metadata alongside the
 isolated runtime. Never commit or redistribute Minecraft/Folia runtime jars
 as part of this plugin source or deliverable.
+
+Additional verified dependency: Folia **26.3 build 6 ALPHA**, launcher SHA-256
+`3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d`.
+Both classpaths pass 101 tests. Live checks use the same 26.2-compiled plugin on
+both runtimes; see the committed reports for tested scenarios and limitations.
+
+Before any disposable server startup, opt out of built-in server analytics:
+
+```sh
+mkdir -p plugins/bStats
+printf '%s\n' 'enabled: false' 'serverUuid: 00000000-0000-0000-0000-000000000000' \
+  'logFailedRequests: false' > plugins/bStats/config.yml
+grep -qx 'enabled: false' plugins/bStats/config.yml
+```
+
+CI performs this setup before launching Java, binds localhost, stops the server,
+and retains only the plugin and verification logs for three days. Runtime jars
+are never included in the published plugin artifact.

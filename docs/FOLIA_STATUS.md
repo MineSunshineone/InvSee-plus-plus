@@ -1,24 +1,71 @@
 # Legacy hardening checkpoint and standalone Folia implementation
 
 
-## Current implementation (separate module)
+## Current standalone release candidate
 
-The later `InvSee++_Folia` module does **not** execute the legacy NMS mirror/API
-paths discussed below. It implements owner-dispatched detached menus, journaled
-slot transfers and administrative whole-inventory patches, offline login fencing,
-and recoverable escrow. See
-[`InvSee++_Folia/README.zh-CN.md`](../InvSee++_Folia/README.zh-CN.md) for current
-commands, tested versions, installation instructions and explicit limitations.
+`InvSee++_Folia` is the separate Folia implementation; it does **not** execute the
+legacy shared NMS mirror/API paths below. The release candidate is
+`0.31.23-folia.1-rc1` (`InvSee++-Folia.jar`), for **Java 25 and the explicit
+Minecraft/Folia 26.2 / 26.3 allowlist**. New versions require separate verification,
+not merely an edited version check. The legacy plugin remains disabled for Folia.
 
-The remaining sections describe the **earlier legacy-code checkpoint**, not an
-outstanding implementation plan for the standalone module. The legacy descriptor
-remains disabled for Folia. The new module has its own acceptance and support gate;
-no test suite establishes arbitrary crash safety, all future versions, or all
-third-party inventory integrations.
+The standalone module implements owner-dispatched detached menus with native
+mutation protection, journaled slot transfers and give/clear/clone patches,
+UUID-wide offline login fencing, checked persistence, and recoverable escrow.
+Online and offline main/ender inventories are supported; ambiguous persistence
+outcomes are quarantined rather than blindly replayed.
 
-The requested baseline is **Folia 26.2**. Later versions require separate adapter
-verification; version numbers alone do not establish compatibility. The legacy
-plugin descriptor deliberately remains `folia-supported: false`.
+### Verified scope (2026-11-01)
+
+- Production and tests compile against official Folia **26.2 build 7 BETA** and
+  **26.3 build 6 ALPHA**; **101 tests pass on each classpath**.
+- The same 26.2-compiled candidate passed the full fresh-world 26.2 suite and the
+  targeted 26.3 confirmation: real GUI editing, all six administrative commands,
+  offline admission, component-preserving cloning, permission revocation,
+  console authorization with blanket console permissions disabled, and stale
+  click packets after plugin disable. Native equipment/planner/offline-storage
+  checks pass on both versions.
+- The full latest-binary distinct-region race suite ran on 26.2. The earlier full
+  26.3 race suite used the preceding candidate; it is **not** presented as a full
+  latest-binary 26.3 rerun. Real clients used the official ViaVersion/ViaBackwards
+  protocol bridge from 26.1, not native 26.2/26.3 clients.
+- Latest 26.2 patch audit: 19 records, 17 completed / 2 conflicts / 0 unresolved.
+  The 26.3 fixture accumulated 33 records, 29 completed / 4 conflicts / 0 unresolved;
+  that total includes the preceding run. See the exact artifact hashes, evidence,
+  fixture accounting and observed limitations in
+  [`test-harness/PARITY_RESULTS.md`](../test-harness/PARITY_RESULTS.md).
+
+Final RC1 packaging passed: all 63 production class entries are byte-identical to
+the tested candidate, and the exact final jar enabled and completed console
+main/ender give/clear smoke operations on both versions before graceful shutdown.
+The new module's `folia-supported: true` gate is enabled; the legacy gate stays
+false. Final jar SHA-256:
+`4fbb0f66dc4fb1e10813f16de016acb5d09d5b482c8c7a220c59819cba15e70e`.
+Full suites were not repeated after metadata-only packaging. See
+[sanitized RC1 evidence summary](../test-harness/EVIDENCE_SUMMARY.md) for final smoke outcomes and
+per-class hashes. The standalone support flag does not make the legacy plugin or
+its addons safe.
+
+### Explicit boundaries
+
+Unsupported actions are refused, not routed to vanilla editing: arbitrary
+occupied-slot swaps, drag/drop/creative cloning, and cursor/crafting editing.
+Give accepts material/count, not custom component/NBT syntax. This module is not
+the old public API or a per-world-inventory integration. Offline data must already
+exist in the current data version; older data must first migrate through login.
+
+No suite proves arbitrary crash/power-loss safety, every third-party inventory
+race, native-client compatibility, sustained-load performance, or all future
+versions. Fsync and checked saves have real latency costs; bounded queues and
+coalesced refreshes are not a throughput guarantee. See
+[`InvSee++_Folia/README.zh-CN.md`](../InvSee++_Folia/README.zh-CN.md) for installation,
+permissions, recovery procedures and the full feature boundaries.
+
+## Historical legacy-code checkpoint
+
+The remaining sections describe the **earlier legacy implementation**, not an
+outstanding implementation plan for the separate standalone module. Its
+`folia-supported: false` descriptor remains intentional.
 
 ## Implemented and checked
 
@@ -38,7 +85,7 @@ JDK 25 and Maven 3.9.11. This is **not** a full plugin build or a Folia runtime 
 The eight new focused tests cover cache publication/replacement and scheduler
 completion/rejection; existing tests cover other utilities and templates.
 
-## Release-blocking architectural work
+## Historical legacy release blockers
 
 1. `MainNmsInventory` and `EnderNmsInventory` retain live target inventory lists.
    A viewer in another region mutates/reads those lists from the wrong owner.
@@ -54,7 +101,7 @@ completion/rejection; existing tests cover other utilities and templates.
 5. Addon clone/give/clear paths, permission refresh, viewer lists, shutdown, and
    every public API entry point need their own owner/lifecycle audit.
 
-## Required design and acceptance tests
+## Historical design and acceptance requirements
 
 Use detached per-viewer inventories. Cancel native cross-inventory edits and
 process supported actions through an explicit transaction: reserve viewer source

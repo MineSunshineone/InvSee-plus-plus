@@ -2,6 +2,10 @@
 
 ## Recorded execution
 
+Sanitized aggregate results and final artifact binding: **[EVIDENCE_SUMMARY.md](EVIDENCE_SUMMARY.md)**. Raw runtime evidence is local-only, excluded from source/distribution archives. All fixtures are disposable synthetic test-player data, not production data.
+
+Latest fresh-workspace paired26.2/26.3 administrative and GUI evidence: **[PARITY_RESULTS.md](PARITY_RESULTS.md)**. Historical baseline results below must not be treated as proof for a different artifact.
+
 - `./test-harness/run-synthetic.sh`: **23/23 passed** on JDK25. Includes existing transfer fault tests plus 1,000 simultaneous-editor races using three distinct synthetic owner executors, a retired-destination/no-replay check, and 1,000 offline-versus-login admission races. The first run took 222.753ms for 3,000 synthetic transfers; use the latest log for repeat-run timing. **Not Folia performance or real-region evidence.** Log: sibling `folia-tools/adversarial-owner-tests.log`.
 - `./test-harness/build-live-probe.sh`: **compiled** against official Folia26.2 build7-beta runtime libraries. Produces `test-harness/InvSeeLiveOwnerProbe.jar`; does not install or run it.
 - Real-player execution: **RUN through official ViaVersion+ViaBackwards translation; see LIVE_RESULTS.md for per-artifact outcomes and remaining gaps**. Native26.2 automated clients remain unavailable. Official npm `minecraft-protocol@1.68.0` supports versions through26.1; `minecraft-data@3.119.0` has no26.2 schema files or pc dataPaths entry. Release tarballs were retrieved with `npm pack --ignore-scripts` and SHA512 checked against registry. No community fork installed, no server checks bypassed. Official Mineflayer dependencies were subsequently installed with scripts disabled for translated26.1 clients.
@@ -20,9 +24,9 @@ Only on a disposable isolated localhost Folia26.2 server. Never put this test pl
 
 This probe uses its own correctly owner-dispatched Bukkit endpoints. It **does not validate production `InventoryAccess`, the InvSee GUI/event cancellation, persistence, offline NBT integration, or real disconnect/login races**. A PASS means only the stated live-owner core scenario.
 
-## Required release-gate scenarios not yet executed
+## Broader release-gate matrix (not exhaustively executed)
 
-Run these through the actual InvSee GUI with the three clients, recording pre/post item counts in all target/viewer inventories, cursors, ground entities and durable journals; distinguish physically present items from recovery records (never count the same escrow as both).
+Some individual cases below have passed as recorded in `LIVE_RESULTS.md` and `PARITY_RESULTS.md`; the complete phase-by-phase matrix remains open. Run remaining cases through the actual InvSee GUI with the three clients, recording pre/post item counts in all target/viewer inventories, cursors, ground entities and durable journals; distinguish physically present items from recovery records (never count the same escrow as both).
 
 - Two viewers simultaneously remove/split the same target slot; hotbar swaps, shift-click, drag, double-click and creative actions must not introduce a second mutation path.
 - Teleport the target and each viewer across distant regions while operations are in flight. Verify owner assertions continue to pass and no access occurs under the previous owner.
