@@ -16,6 +16,55 @@ public final class LiveOwnerProbe extends JavaPlugin {
     private volatile boolean running;
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof ConsoleCommandSender)) return false;
+        if (command.getName().equals("probeseed") && args.length == 1) {
+            Player player = Bukkit.getPlayerExact(args[0]);
+            if (player == null) return false;
+            owned(player, () -> {
+                require(player.getInventory().getItem(9) == null, "metadata fixture requires empty slot9");
+                ItemStack item = new ItemStack(Material.DIAMOND, 3);
+                var meta = item.getItemMeta();
+                meta.displayName(net.kyori.adventure.text.Component.text("Parity Proof"));
+                meta.lore(java.util.List.of(net.kyori.adventure.text.Component.text("retained lore")));
+                meta.getPersistentDataContainer().set(new NamespacedKey(this, "parity"), org.bukkit.persistence.PersistentDataType.STRING, "snapshot-proof");
+                item.setItemMeta(meta); player.getInventory().setItem(9, item); player.saveData();
+                return true;
+            }).whenComplete((v,e) -> getLogger().info("METADATA SEED: " + (e == null ? "created3 diamonds slot9 intentionally" : e)));
+            return true;
+        }
+        if (command.getName().equals("phaseguard") && args.length == 2) {
+            Player actor = Bukkit.getPlayerExact(args[0]);
+            if (actor == null) return false;
+            String permission = args[1];
+            Bukkit.getAsyncScheduler().runNow(this, ignored -> {
+                CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+                try {
+                    var production = Bukkit.getPluginManager().getPlugin("InvSeePlusPlusFolia");
+                    var field = production.getClass().getDeclaredField("journalExecutor");
+                    field.setAccessible(true); // Test-only delay: no owner checks replaced.
+                    ThreadPoolExecutor executor = (ThreadPoolExecutor) field.get(production);
+                    executor.execute(() -> { entered.countDown(); try { release.await(12, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } });
+                    require(entered.await(2, TimeUnit.SECONDS), "journal delay did not start");
+                    getLogger().info("PHASEGUARD READY: next quiet-test journal access will revoke " + permission);
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (executor.getQueue().isEmpty() && System.nanoTime() < deadline) Thread.sleep(10);
+                    require(!executor.getQueue().isEmpty(), "no command journal access queued; no revocation performed");
+                    owned(actor, () -> { actor.addAttachment(this, permission, false); return true; }).get(2, TimeUnit.SECONDS);
+                    getLogger().info("PHASEGUARD REVOKED after command journal access queued; releasing bounded delay");
+                } catch (Throwable e) { getLogger().log(java.util.logging.Level.SEVERE, "PHASEGUARD INCONCLUSIVE", e); }
+                finally { release.countDown(); }
+            });
+            return true;
+        }
+        if (command.getName().equals("plannercheck")) {
+            var plugin = Bukkit.getPluginManager().getPlugin("InvSeePlusPlusFolia");
+            Bukkit.getAsyncScheduler().runNow(this, ignored -> {
+                try {
+                    Object report = plugin.getClass().getClassLoader().loadClass("com.janboerman.invsee.folia.InventoryPatchRuntimeChecks").getMethod("run").invoke(null);
+                    getLogger().info("PLANNER: " + report);
+                } catch (Throwable e) { getLogger().log(java.util.logging.Level.SEVERE, "PLANNER FAILED", e); }
+            });
+            return true;
+        }
         if (command.getName().equals("probedisable")) {
             var target = Bukkit.getPluginManager().getPlugin("InvSeePlusPlusFolia");
             Bukkit.getGlobalRegionScheduler().execute(this, () -> {

@@ -151,6 +151,38 @@ public final class OfflineStore implements Listener, AutoCloseable {
         return result;
     }
 
+    /** Read-only durability confirmation of an owner-thread whole-inventory administrative patch. */
+    public CompletableFuture<Void> verifySavedContents(UUID id, boolean ender, byte[][] expected) {
+        final byte[][] copy;
+        try { copy = copyContents(ender, expected); }
+        catch (IllegalArgumentException ex) { return CompletableFuture.failedFuture(ex); }
+        if (closed || !pending.tryAcquire()) return CompletableFuture.failedFuture(new IOException("Offline IO closed or busy"));
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            io.execute(() -> {
+                try {
+                    Path file = directory.resolve(id + ".dat");
+                    NbtInventoryCodec codec = new NbtInventoryCodec(registries);
+                    CompoundTag root = codec.decode(AtomicPlayerDataFile.readForcedSnapshot(file));
+                    for (int slot = 0; slot < copy.length; slot++) {
+                        if (!codec.matches(root, ender, slot, copy[slot])) throw new IOException("Native player save did not persist inventory slot " + slot);
+                    }
+                    result.complete(null);
+                } catch (Throwable ex) { result.completeExceptionally(ex); }
+                finally { pending.release(); }
+            });
+        } catch (RuntimeException ex) { pending.release(); result.completeExceptionally(ex); }
+        return result;
+    }
+
+    private static byte[][] copyContents(boolean ender, byte[][] contents) {
+        int size = ender ? 27 : 43;
+        if (contents == null || contents.length != size) throw new IllegalArgumentException("Expected exactly " + size + " inventory slots");
+        byte[][] result = new byte[size][];
+        for (int slot = 0; slot < size; slot++) result[slot] = contents[slot] == null ? null : contents[slot].clone();
+        return result;
+    }
+
     /**
      * Shutdown-only IO barrier: no owner-region task is awaited. Must return only after every writer
      * stops, before Bukkit unregisters the pre-login fence. Do not call during normal gameplay.
@@ -194,6 +226,37 @@ public final class OfflineStore implements Listener, AutoCloseable {
                 try {
                     AtomicPlayerDataFile.replace(file(), before, NbtInventoryCodec.compress(root));
                     recoveryBlocked.add(id); // keep login fenced until durable transfer acknowledgement
+                } catch (IOException ex) {
+                    if (AtomicPlayerDataFile.needsRecovery(file())) recoveryBlocked.add(id);
+                    throw ex;
+                }
+                return true;
+            });
+        }
+        /**
+         * All-or-nothing administrative patch of the managed inventory, with one file transaction.
+         * All expected slots must match before any replacement is persisted. The other inventory
+         * kind and unrelated NBT remain untouched. The caller must durably journal then acknowledge.
+         */
+        public CompletableFuture<Boolean> compareAndSetContents(boolean ender, byte[][] expected, byte[][] replacement) {
+            final byte[][] beforeItems, afterItems;
+            try {
+                beforeItems = copyContents(ender, expected);
+                afterItems = copyContents(ender, replacement);
+            } catch (IllegalArgumentException ex) { return CompletableFuture.failedFuture(ex); }
+            return submit(() -> {
+                byte[] before = AtomicPlayerDataFile.read(file());
+                CompoundTag root = codec.decode(before);
+                for (int slot = 0; slot < beforeItems.length; slot++) {
+                    if (!codec.matches(root, ender, slot, beforeItems[slot])) return false;
+                }
+                for (int slot = 0; slot < afterItems.length; slot++) {
+                    // Preserve even unknown per-item tag fields for slots that do not change.
+                    if (!codec.matches(root, ender, slot, afterItems[slot])) codec.replace(root, ender, slot, afterItems[slot]);
+                }
+                try {
+                    AtomicPlayerDataFile.replace(file(), before, NbtInventoryCodec.compress(root));
+                    recoveryBlocked.add(id);
                 } catch (IOException ex) {
                     if (AtomicPlayerDataFile.needsRecovery(file())) recoveryBlocked.add(id);
                     throw ex;

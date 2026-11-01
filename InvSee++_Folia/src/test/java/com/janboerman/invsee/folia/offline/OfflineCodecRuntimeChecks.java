@@ -121,6 +121,39 @@ public final class OfflineCodecRuntimeChecks {
             equalItem(gold, lease.read(true).get()[26], "ender persisted");
             require(!lease.compareAndSet(false, 4, null, gold.serializeAsBytes()).get(), "stale CAS rejected without write");
             require("untouched".equals(NbtInventoryCodec.decompress(java.nio.file.Files.readAllBytes(file)).getStringOr("invsee-test-sentinel", "")), "unrelated field survived both commits");
+            byte[][] originalMain = lease.read(false).get();
+            byte[][] originalEnder = lease.read(true).get();
+            byte[][] batchMain = lease.read(false).get();
+            batchMain[4] = null;
+            batchMain[7] = gold.serializeAsBytes();
+            batchMain[36] = new ItemStack(Material.NETHERITE_BOOTS).serializeAsBytes();
+            batchMain[40] = new ItemStack(Material.SHIELD).serializeAsBytes();
+            batchMain[41] = new ItemStack(Material.IRON_HORSE_ARMOR).serializeAsBytes();
+            batchMain[42] = new ItemStack(Material.SADDLE).serializeAsBytes();
+            require(lease.compareAndSetContents(false, originalMain, batchMain).get(), "whole main atomic patch");
+            require(AtomicPlayerDataFile.needsRecovery(file), "whole patch retains journal until ack");
+            lease.acknowledgeCommit().get();
+            store.verifySavedContents(id, false, batchMain).get();
+            equalItem(gold, lease.read(false).get()[7], "whole main replacement persisted");
+            equalItem(gold, lease.read(true).get()[26], "whole main preserves ender");
+            require(!lease.compareAndSetContents(false, originalMain, new byte[43][]).get(), "whole CAS rejects any stale slot");
+            require(!AtomicPlayerDataFile.needsRecovery(file), "stale whole CAS creates no journal");
+            require(lease.compareAndSetContents(false, batchMain, new byte[43][]).get(), "whole inventory clear");
+            lease.acknowledgeCommit().get();
+            for (byte[] item : lease.read(false).get()) require(item == null, "clear includes armor/offhand/body/saddle");
+            byte[][] batchEnder = lease.read(true).get();
+            batchEnder[26] = null; batchEnder[3] = diamonds.serializeAsBytes();
+            require(lease.compareAndSetContents(true, originalEnder, batchEnder).get(), "whole ender atomic patch");
+            lease.acknowledgeCommit().get();
+            store.verifySavedContents(id, true, batchEnder).get();
+            require(lease.read(false).get()[7] == null, "whole ender preserves cleared main");
+            require(lease.compareAndSetContents(false, new byte[43][], originalMain).get(), "restore main test fixture");
+            lease.acknowledgeCommit().get();
+            require(lease.compareAndSetContents(true, batchEnder, originalEnder).get(), "restore ender test fixture");
+            lease.acknowledgeCommit().get();
+            require(lease.compareAndSetContents(false, new byte[42][], new byte[43][]).isCompletedExceptionally(), "batch main rejects truncated snapshot");
+            require(store.verifySavedContents(id, true, new byte[28][]).isCompletedExceptionally(), "batch verify rejects extra slots");
+            require("untouched".equals(NbtInventoryCodec.decompress(java.nio.file.Files.readAllBytes(file)).getStringOr("invsee-test-sentinel", "")), "unrelated NBT survives whole patches");
             lease.closeAsync().get();
         }
         var admitted = prelogin(id);
@@ -174,7 +207,7 @@ public final class OfflineCodecRuntimeChecks {
         }
         try (var lease = store.open(id).get()) { lease.closeAsync().get(); }
         java.nio.file.Files.delete(file);
-        return "OFFLINE_STORAGE_CHECKS_PASS: main+ender CAS preservation, stale compare, durable ack, exclusive lease, connecting/duplicate/cancelled prelogin and close fence, bounded queue/drain";
+        return "OFFLINE_STORAGE_CHECKS_PASS: main+ender CAS preservation, stale compare, durable ack, exclusive lease, connecting/duplicate/cancelled prelogin and close fence, bounded queue/drain, atomic whole-inventory patch/clear";
     }
     private static com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent connectionClose(java.util.UUID id) throws Exception {
         Class<com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent> type = com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent.class;

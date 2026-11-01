@@ -11,10 +11,12 @@ folia-supported: false
 softdepend: [InvSeePlusPlus]
 commands:
   invsee:
+    aliases: [inventorysee, isee]
     description: View a player's inventory using an isolated transaction session
     permission: invseeplusplus.invsee.view
     usage: /invsee <online-name|UUID>
   endersee:
+    aliases: [enderchestsee, esee]
     description: View a player's ender chest using an isolated transaction session
     permission: invseeplusplus.endersee.view
     usage: /endersee <online-name|UUID>
@@ -22,6 +24,36 @@ commands:
     description: List quarantined transactions without automatically replaying them
     permission: invseeplusplus.recovery
     usage: /invseerecovery
+  invgive:
+    aliases: [inventorygive, igive]
+    description: Journaled give operation for player inventory
+    permission: invseeplusplus.give.inventory
+    usage: /invgive <target> <material> [amount]
+  endergive:
+    aliases: [enderchestgive, egive]
+    description: Journaled give operation for player enderchest
+    permission: invseeplusplus.give.enderchest
+    usage: /endergive <target> <material> [amount]
+  invclear:
+    aliases: [inventoryclear, iclear]
+    description: Journaled clear operation for player inventory
+    permission: invseeplusplus.clear.inventory
+    usage: /invclear <target> [material] [amount]
+  enderclear:
+    aliases: [enderchestclear, eclear]
+    description: Journaled clear operation for player enderchest
+    permission: invseeplusplus.clear.enderchest
+    usage: /enderclear <target> [material] [amount]
+  invclone:
+    aliases: [inventoryclone, iclone]
+    description: Journaled clone operation for player inventory
+    permission: invseeplusplus.clone.inventory
+    usage: /invclone <source> [target]
+  enderclone:
+    aliases: [enderchestclone, eclone]
+    description: Journaled clone operation for player enderchest
+    permission: invseeplusplus.clone.enderchest
+    usage: /enderclone <source> [target]
 permissions:
   invseeplusplus.invsee.view:
     default: op
@@ -45,3 +77,62 @@ permissions:
     default: false
   invseeplusplus.recovery:
     default: op
+  invseeplusplus.give.inventory:
+    default: op
+  invseeplusplus.give.enderchest:
+    default: op
+  invseeplusplus.clear.inventory:
+    default: op
+  invseeplusplus.clear.enderchest:
+    default: op
+  invseeplusplus.clone.inventory:
+    default: op
+  invseeplusplus.clone.enderchest:
+    default: op
+  invseeplusplus.view:
+    default: op
+    children:
+      invseeplusplus.invsee.view: true
+      invseeplusplus.endersee.view: true
+  invseeplusplus.edit:
+    default: op
+    children:
+      invseeplusplus.invsee.edit: true
+      invseeplusplus.endersee.edit: true
+  invseeplusplus.exempt:
+    default: false
+    children:
+      invseeplusplus.exempt.invsee: true
+      invseeplusplus.exempt.endersee: true
+  invseeplusplus.bypass-exempt:
+    default: false
+    children:
+      invseeplusplus.bypass-exempt.invsee: true
+      invseeplusplus.bypass-exempt.endersee: true
+  invseeplusplus.give.*:
+    default: false
+    children:
+      invseeplusplus.give.inventory: true
+      invseeplusplus.give.enderchest: true
+  invseeplusplus.clear.*:
+    default: false
+    children:
+      invseeplusplus.clear.inventory: true
+      invseeplusplus.clear.enderchest: true
+  invseeplusplus.clone.*:
+    default: false
+    children:
+      invseeplusplus.clone.inventory: true
+      invseeplusplus.clone.enderchest: true
+  invseeplusplus.*:
+    default: false
+    children:
+      invseeplusplus.invsee.edit: true
+      invseeplusplus.endersee.edit: true
+      invseeplusplus.exempt.invsee: true
+      invseeplusplus.exempt.endersee: true
+      invseeplusplus.bypass-exempt.invsee: true
+      invseeplusplus.bypass-exempt.endersee: true
+      invseeplusplus.give.*: true
+      invseeplusplus.clear.*: true
+      invseeplusplus.clone.*: true

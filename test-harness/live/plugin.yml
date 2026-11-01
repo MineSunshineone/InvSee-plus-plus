@@ -19,3 +19,12 @@ commands:
   equipmentcheck:
     description: Console-only native equipment component runtime checks
     usage: equipmentcheck
+  probeseed:
+    description: Create three metadata fixture diamonds in disposable empty slot9, console only
+    usage: probeseed player
+  phaseguard:
+    description: Bounded isolated journal-delay permission-revocation check, console only
+    usage: phaseguard player permission
+  plannercheck:
+    description: Native detached snapshot planner checks, console only
+    usage: plannercheck

@@ -62,16 +62,31 @@ async function race() {
   if(count(a)!==64 && count(b)!==64) throw Error('not exactly one full-stack winner')
   log('PASS-client-observed-race',{counts:after,ms:performance.now()-start, caveat:'Verify server playerdata/journal and distinct-owner probe separately'})
 }
+async function admin(bot,command,requireCompletion=true){
+ const result=await new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{bot.removeListener('messagestr',received);reject(Error('admin response timeout: '+command))},15000)
+  const received=message=>{if(/^(GIVE|CLEAR|CLONE) [0-9a-f-]+:|^Command refused|^No permission|^Wait for your current|^Inventory administration is busy/.test(message)){clearTimeout(timer);bot.removeListener('messagestr',received);resolve(message)}}
+  bot.on('messagestr',received);bot.chat(command)
+ })
+ log('admin-result',{player:bot.username,command,result})
+ if(requireCompletion&&!result.endsWith(': COMPLETED'))throw Error('admin did not complete: '+result)
+ await delay(250);return result
+}
+
 async function main() {
   for (const name of names) { bots.push(await connect(name)); log('spawn',{player:name,uuid:bots.at(-1).uuid}); await delay(300) }
   log('ready',{commands:'status | race | inspect A/B [UUID] | chat T/A/B <command> | click A/B slot button mode | quit T/A/B | reconnect T/A/B | window A/B | exit'})
   const rl=readline.createInterface({input:process.stdin,terminal:false})
   for await (const line of rl) {
+    log('harness-command',{line:line.trim()})
     const [cmd,who,...args]=line.trim().split(/\s+/); const bot=bots[{T:0,A:1,B:2}[who]]
     try {
       if(cmd==='status') log('status',{counts:counts(),positions:bots.map(b=>({name:b.username,position:b.entity?.position}))})
       else if(cmd==='race') await race()
       else if(cmd==='inspect') await inspect(bot,args[0])
+      else if(cmd==='admin') await admin(bot,args.join(' '))
+      else if(cmd==='assert') {const expected=[who,...args].map(Number);await waitFor(()=>bots.every((b,i)=>count(b)===expected[i]));await delay(200);if(!bots.every((b,i)=>count(b)===expected[i]))throw Error('unstable count assertion');log('PASS-counts',{expected,counts:counts()})}
+      else if(cmd==='adminrace') {const before=count(bots[0]);const results=await Promise.all([admin(bots[1],'/invgive InvTarget diamond 1',false),admin(bots[2],'/invgive InvTarget diamond 1',false)]);const added=results.filter(x=>x.endsWith(': COMPLETED')).length;await waitFor(()=>count(bots[0])===before+added);log('PASS-administrative-race',{before,added,after:count(bots[0]),results})}
       else if(cmd==='chat') bot.chat(args.join(' '))
       else if(cmd==='click') await bot.clickWindow(...args.map(Number))
       else if(cmd==='replay') {

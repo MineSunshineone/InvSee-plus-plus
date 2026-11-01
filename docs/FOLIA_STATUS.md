@@ -1,4 +1,20 @@
-# Folia 26.2+ safety work — not a supported release
+# Legacy hardening checkpoint and standalone Folia implementation
+
+
+## Current implementation (separate module)
+
+The later `InvSee++_Folia` module does **not** execute the legacy NMS mirror/API
+paths discussed below. It implements owner-dispatched detached menus, journaled
+slot transfers and administrative whole-inventory patches, offline login fencing,
+and recoverable escrow. See
+[`InvSee++_Folia/README.zh-CN.md`](../InvSee++_Folia/README.zh-CN.md) for current
+commands, tested versions, installation instructions and explicit limitations.
+
+The remaining sections describe the **earlier legacy-code checkpoint**, not an
+outstanding implementation plan for the standalone module. The legacy descriptor
+remains disabled for Folia. The new module has its own acceptance and support gate;
+no test suite establishes arbitrary crash safety, all future versions, or all
+third-party inventory integrations.
 
 The requested baseline is **Folia 26.2**. Later versions require separate adapter
 verification; version numbers alone do not establish compatibility. The legacy

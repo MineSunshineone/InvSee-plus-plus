@@ -4,6 +4,7 @@ import com.janboerman.invsee.folia.menu.ProtectedMenu;
 import com.janboerman.invsee.folia.offline.OfflineStore;
 import com.janboerman.invsee.folia.offline.OfflineNameResolver;
 import com.janboerman.invsee.folia.transfer.*;
+import com.janboerman.invsee.folia.patch.*;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.command.*;
@@ -28,6 +29,8 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
     private TransferJournal journal;
     private TransferService transfers;
     private HeldEscrowRecovery heldRecovery;
+    private PatchJournal patchJournal;
+    private PatchService patches;
     private OfflineStore offline;
     private OfflineNameResolver names;
     private volatile boolean accepting;
@@ -46,6 +49,8 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
             journal = new FileJournal(getDataFolder().toPath().resolve("transactions"), journalExecutor);
             transfers = new TransferService(journal);
             heldRecovery = new HeldEscrowRecovery(journal, transfers);
+            patchJournal = new FilePatchJournal(getDataFolder().toPath().resolve("patches"), journalExecutor);
+            patches = new PatchService(patchJournal);
             offline = new OfflineStore(this);
             names = new OfflineNameResolver(this);
         } catch (java.io.IOException error) {
@@ -56,11 +61,18 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         Objects.requireNonNull(getCommand("invsee")).setExecutor(this);
         Objects.requireNonNull(getCommand("endersee")).setExecutor(this);
         Objects.requireNonNull(getCommand("invseerecovery")).setExecutor(this);
-        heldRecovery.reconcileCompletedClaims().thenCompose(unused -> journal.loadUnresolved()).whenComplete((records, error) -> {
-            if (error != null) { getLogger().log(Level.SEVERE, "Cannot inspect recovery ledger; inventory access remains disabled", error); return; }
-            for (TransferRecord record : records) if (!record.state().terminal()) quarantine(record);
-            if (isEnabled()) accepting = true;
-        });
+        AdministrativeCommands administration = new AdministrativeCommands(this, patches, offline, names);
+        for (String command : new String[]{"invgive", "endergive", "invclear", "enderclear", "invclone", "enderclone"})
+            Objects.requireNonNull(getCommand(command)).setExecutor(administration);
+        heldRecovery.reconcileCompletedClaims().thenCompose(unused -> journal.loadUnresolved())
+                .thenCombine(patchJournal.loadUnresolved(), (records, patchRecords) -> {
+                    for (TransferRecord record : records) if (!record.state().terminal()) quarantine(record);
+                    for (PatchRecord record : patchRecords) quarantinePatch(record);
+                    return true;
+                }).whenComplete((ready, error) -> {
+                    if (error != null) { getLogger().log(Level.SEVERE, "Cannot inspect recovery ledger; inventory access remains disabled", error); return; }
+                    if (isEnabled()) accepting = true;
+                });
         getLogger().info("Folia 26.2 adapter enabled. Left selects full stack, right selects half; compatible merges and shift transfers are supported.");
     }
 
@@ -76,7 +88,9 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         // here: another plugin can disable us from an event inside our owner task.
         // Such in-progress mutations are explicitly quarantined as uncertain.
         PlayerTasks.stop();
-        if (transfers != null) transfers.stopAccepting().join();
+        CompletableFuture<Void> transferDrain = transfers == null ? CompletableFuture.completedFuture(null) : transfers.stopAccepting();
+        CompletableFuture<Void> patchDrain = patches == null ? CompletableFuture.completedFuture(null) : patches.stopAccepting();
+        CompletableFuture.allOf(transferDrain, patchDrain).join();
         if (offline != null) offline.close();
         if (names != null) names.close();
         if (journalExecutor != null) {
@@ -93,6 +107,24 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("invseerecovery")) {
             if (!sender.hasPermission("invseeplusplus.recovery")) { sender.sendMessage("No recovery-report permission."); return true; }
+            if (args.length == 1 && args[0].equalsIgnoreCase("patches")) {
+                patchJournal.loadUnresolved().whenComplete((records, error) -> {
+                    if (error != null) { reply(sender, "Cannot read patch recovery: " + describe(error)); return; }
+                    StringBuilder report = new StringBuilder("Unresolved administrative patches: ").append(records.size());
+                    int count = 0;
+                    for (PatchRecord record : records) { if (count++ == 10) break; report.append("\n").append(patchDescription(record)); }
+                    reply(sender, report.toString());
+                });
+                return true;
+            }
+            if (args.length == 2 && args[0].equalsIgnoreCase("patch")) {
+                final UUID id;
+                try { id = UUID.fromString(args[1]); }
+                catch (IllegalArgumentException error) { sender.sendMessage("Invalid patch UUID."); return true; }
+                patchJournal.load(id).whenComplete((record, error) -> reply(sender, error != null
+                        ? "Cannot read patch: " + describe(error) : record.map(FoliaInvSeePlugin::patchDescription).orElse("Patch not found")));
+                return true;
+            }
             if (args.length == 2 && args[0].equalsIgnoreCase("claim")) {
                 if (!(sender instanceof Player receiver)) { sender.sendMessage("Run the escrow claim in game with a free storage slot."); return true; }
                 UUID original;
@@ -120,7 +152,7 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
                         if (count++ == 10) { report.append("\nMore records exist; inspect the transaction directory."); break; }
                         report.append("\n").append(recoveryDescription(record));
                     }
-                    report.append("\nNo automatic replay. Back up both players' data and journals before operator reconciliation.");
+                    report.append("\nUse /invseerecovery patches for administrative give/clear/clone records. No automatic replay; back up data and journals before reconciliation.");
                     reply(sender, report.toString());
                 });
             }
@@ -302,13 +334,17 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         Selection selection = new Selection(selected.target, selected.slot, selected.expected,
                 InventoryAccess.bytes(remainder), InventoryAccess.bytes(moved));
         UUID operationId = UUID.randomUUID();
-        if (targetBusy.putIfAbsent(session.access.id(), operationId) != null) { session.viewer.sendMessage("Another transfer is pending for this target. Try again."); return; }
-        if (quarantined.containsKey(session.access.id()) || quarantined.containsKey(session.viewer.getUniqueId())) {
+        if (targetBusy.putIfAbsent(session.access.id(), operationId) != null) { session.viewer.sendMessage("Another operation is pending for this target. Try again."); return; }
+        if (targetBusy.putIfAbsent(session.viewer.getUniqueId(), operationId) != null) {
             targetBusy.remove(session.access.id(), operationId);
+            session.viewer.sendMessage("Another operation is pending for your inventory. Try again."); return;
+        }
+        if (quarantined.containsKey(session.access.id()) || quarantined.containsKey(session.viewer.getUniqueId())) {
+            releaseTransferSlots(session, operationId);
             session.viewer.sendMessage("An unresolved transfer locks one of these inventories. Ask an operator to inspect /invseerecovery.");
             return;
         }
-        if (!session.beginTransfer()) { targetBusy.remove(session.access.id(), operationId); return; }
+        if (!session.beginTransfer()) { releaseTransferSlots(session, operationId); return; }
         session.selection = null;
         InventoryAccess viewerAccess = new InventoryAccess.Online(this, session.viewer, false, false);
         SlotEndpoint source = admittedSource((selection.target ? session.access : viewerAccess).slot(selection.slot), session);
@@ -319,7 +355,7 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
                     InventoryAccess.value(selection.remainder), InventoryAccess.value(selection.transferred),
                     InventoryAccess.value(destinationBefore), InventoryAccess.value(InventoryAccess.bytes(destinationAfter)));
         } catch (RuntimeException failure) {
-            targetBusy.remove(session.access.id(), operationId);
+            releaseTransferSlots(session, operationId);
             session.finishTransfer();
             session.viewer.sendMessage("Transfer refused before mutation: " + describe(failure));
             return;
@@ -328,7 +364,7 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
             if (error != null || result.outcome() == TransferService.Outcome.RECOVERY_REQUIRED) {
                 quarantine(session.access.id(), operationId); quarantine(session.viewer.getUniqueId(), operationId);
             }
-            targetBusy.remove(session.access.id(), operationId);
+            releaseTransferSlots(session, operationId);
             // close() and completion can run on different owners; release once only.
             session.finishTransfer();
             String message = error == null ? "Transfer " + operationId + ": " + result.outcome() : "Transfer " + operationId + " requires review: " + describe(error);
@@ -339,6 +375,11 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
                 return null;
             }).exceptionally(failure -> null);
         });
+    }
+
+    private void releaseTransferSlots(Session session, UUID operation) {
+        targetBusy.remove(session.access.id(), operation);
+        targetBusy.remove(session.viewer.getUniqueId(), operation);
     }
 
     /** Authorization linearizes immediately before source reservation, not at command lookup. */
@@ -361,6 +402,29 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
                                 : CompletableFuture.completedFuture(false));
             }
         };
+    }
+
+    boolean acceptsOperations() { return accepting; }
+    boolean reserveTarget(UUID target, UUID operation) {
+        if (!accepting || targetBusy.putIfAbsent(target, operation) != null) return false;
+        // Previous operations publish quarantine before releasing their account.
+        if (!accepting || quarantined.containsKey(target)) {
+            targetBusy.remove(target, operation); return false;
+        }
+        return true;
+    }
+    void releaseTarget(UUID target, UUID operation) { targetBusy.remove(target, operation); }
+    boolean isQuarantined(UUID target) { return quarantined.containsKey(target); }
+    boolean prepareAdministrativeActor(Player player) {
+        Session session = sessions.get(player.getUniqueId());
+        if (session != null && session.busy) return false;
+        if (session != null) player.closeInventory();
+        return true;
+    }
+    void replyTo(CommandSender sender, String message) { reply(sender, message); }
+    void quarantinePatch(PatchRecord record) { quarantine(record.target(), record.id()); }
+    CompletableFuture<Void> verifySavedContents(UUID id, boolean ender, byte[][] expected) {
+        return offline.verifySavedContents(id, ender, expected);
     }
 
     CompletableFuture<Void> verifySavedSlot(UUID id, boolean ender, int slot, byte[] expected) {
@@ -390,11 +454,12 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         SlotEndpoint destination = new InventoryAccess.Online(this, receiver, false, false,
                 () -> receiver.hasPermission("invseeplusplus.recovery")).slot(slot);
         heldRecovery.claim(original, child, destination).whenComplete((result, error) -> {
-            targetBusy.remove(receiver.getUniqueId(), child);
-            if (error != null) { reply(receiver, "Escrow claim refused: " + describe(error)); return; }
-            if (result.outcome() == TransferService.Outcome.COMPLETED) releaseQuarantine(original);
-            else if (result.outcome() == TransferService.Outcome.RECOVERY_REQUIRED) quarantine(result.record());
-            reply(receiver, "Escrow claim " + child + ": " + result.outcome() + ". Only proven held escrow is claimable; uncertain transfers are never replayed.");
+            try {
+                if (error != null) { reply(receiver, "Escrow claim refused: " + describe(error)); return; }
+                if (result.outcome() == TransferService.Outcome.COMPLETED) releaseQuarantine(original);
+                else if (result.outcome() == TransferService.Outcome.RECOVERY_REQUIRED) quarantine(result.record());
+                reply(receiver, "Escrow claim " + child + ": " + result.outcome() + ". Only proven held escrow is claimable; uncertain transfers are never replayed.");
+            } finally { targetBusy.remove(receiver.getUniqueId(), child); }
         });
     }
 
@@ -438,6 +503,12 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         else getLogger().info(message);
     }
     private static boolean isEmpty(ItemStack item) { return InventoryAccess.bytes(item) == null; }
+    private static String patchDescription(PatchRecord record) {
+        return record.id() + " | " + record.type() + " | " + record.state() + " | " + java.time.Instant.ofEpochMilli(record.updatedAt())
+                + "\ntarget=" + record.target() + " kind=" + record.kind() + " actor=" + record.actor()
+                + "\n" + record.description() + " | " + record.detail()
+                + "\nFull before/after snapshots are retained. Never automatically overwrite a newer player inventory.";
+    }
     private static String recoveryDescription(TransferRecord record) {
         return record.operationId() + " | " + record.state() + " | " + java.time.Instant.ofEpochMilli(record.updatedAt())
                 + "\nsource=" + record.source() + " -> destination=" + record.destination()

@@ -76,6 +76,30 @@ A missing, stale, malformed, or failed native save fails the transfer; it never
 uses an offline writer against an online player. This verifies the observed save,
 not the durability of arbitrary future native autosaves.
 
+## Administrative whole-inventory patches
+
+`Lease.compareAndSetContents(ender, expected, replacement)` accepts exactly 43 main
+or 27 ender slots and deep-copies all item bytes at admission. It checks every
+expected slot before editing the local NBT, then uses one atomic file transaction.
+The other inventory kind, unrelated root tags, and unchanged item tags are kept.
+A stale comparison returns false without writing a journal. The transfer layer
+must still durably record its phase before `acknowledgeCommit()`.
+
+`verifySavedContents` checks all managed slots in the same forced descriptor
+snapshot for an owner-thread online save. Both APIs preserve the normal journal
+acknowledgement contract, including no-op replacements. A command layer may avoid
+no-op patches before it prepares a transaction.
+
+These APIs and their additional tests were reconstructed on 2026-11-01 from the
+author's retained implementation history after the workspace rollback. Commit
+`9307c134` is the new reconstruction, not a claim of byte-identical restoration of
+the lost parity commits. Current revalidation: offline production and tests compile
+against the official 26.2 and 26.3 runtimes; all 21 offline-package JUnit tests pass
+on each (14 persistence/snapshot tests plus seven name-resolver tests). New
+initialized-server tests must be rerun on the reconstructed integrated artifact.
+The older runtime evidence below describes the historical baseline, not the new
+reconstruction's runtime status.
+
 ## Exact current layout
 
 Official Folia 26.2 build 7 bytecode was inspected with `javap`: `Inventory` stores

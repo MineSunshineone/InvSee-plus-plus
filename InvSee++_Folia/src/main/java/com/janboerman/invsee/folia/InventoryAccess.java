@@ -1,6 +1,7 @@
 package com.janboerman.invsee.folia;
 
 import com.janboerman.invsee.folia.transfer.SlotEndpoint;
+import com.janboerman.invsee.folia.patch.PatchEndpoint;
 import com.janboerman.invsee.folia.transfer.StackValue;
 import com.janboerman.invsee.folia.offline.OfflineStore;
 import org.bukkit.entity.Player;
@@ -13,6 +14,7 @@ interface InventoryAccess extends AutoCloseable {
     UUID id();
     CompletableFuture<byte[][]> read();
     SlotEndpoint slot(int index);
+    PatchEndpoint patch();
     void close();
 
     static byte[] bytes(ItemStack item) {
@@ -80,6 +82,38 @@ interface InventoryAccess extends AutoCloseable {
                 }
             };
         }
+        public PatchEndpoint patch() {
+            return new PatchEndpoint() {
+                public String description() { return id() + ":" + (ender ? "ender" : "main"); }
+                public CompletableFuture<Boolean> compareAndSet(byte[][] expected, byte[][] update) {
+                    return PlayerTasks.call(plugin, player, () -> {
+                        Inventory inventory = inventory();
+                        ItemStack[] current = inventory.getContents();
+                        if (current.length != expected.length || update.length != current.length)
+                            throw new IllegalArgumentException("Inventory shape changed");
+                        ItemStack[] replacements = new ItemStack[update.length];
+                        for (int i = 0; i < current.length; i++) {
+                            replacements[i] = item(update[i]);
+                            if (!ender && !EquipmentRules.accepts(i, replacements[i])) return false;
+                            if (ender && replacements[i] != null && replacements[i].getAmount() > replacements[i].getMaxStackSize()) return false;
+                            if (!java.util.Objects.equals(item(bytes(current[i])), item(expected[i]))) return false;
+                        }
+                        // All validation precedes the one owner-thread replacement.
+                        inventory.setContents(replacements);
+                        player.saveData();
+                        return true;
+                    }).thenCompose(changed -> changed
+                            ? plugin.verifySavedContents(id(), ender, update).thenApply(unused -> true)
+                            : CompletableFuture.completedFuture(false)).handle((changed, error) -> {
+                        if (error == null) return changed;
+                        Throwable cause = error;
+                        while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) cause = cause.getCause();
+                        if (cause instanceof PlayerTasks.NotExecutedException) return false;
+                        throw new java.util.concurrent.CompletionException(cause);
+                    });
+                }
+            };
+        }
         public void close() { }
     }
 
@@ -97,6 +131,17 @@ interface InventoryAccess extends AutoCloseable {
                 public CompletableFuture<Boolean> compareAndSet(StackValue expected, StackValue update) {
                     if (!ender && !EquipmentRules.accepts(index, item(update.bytes()))) return CompletableFuture.completedFuture(false);
                     return lease.compareAndSet(ender, index, nullable(expected), nullable(update));
+                }
+                public CompletableFuture<Void> acknowledgeCommit() { return lease.acknowledgeCommit(); }
+            };
+        }
+        public PatchEndpoint patch() {
+            return new PatchEndpoint() {
+                public String description() { return id + ":" + (ender ? "ender" : "main"); }
+                public CompletableFuture<Boolean> compareAndSet(byte[][] expected, byte[][] update) {
+                    if (!ender) for (int i = 0; i < update.length; i++)
+                        if (!EquipmentRules.accepts(i, item(update[i]))) return CompletableFuture.completedFuture(false);
+                    return lease.compareAndSetContents(ender, expected, update);
                 }
                 public CompletableFuture<Void> acknowledgeCommit() { return lease.acknowledgeCommit(); }
             };

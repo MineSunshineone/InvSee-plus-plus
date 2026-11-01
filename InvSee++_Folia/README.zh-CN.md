@@ -29,6 +29,16 @@
 
 离线读取要求存在可识别、受支持的玩家数据。损坏、版本不匹配、正在登录、另一个编辑会话占用或有未解决事务时，宁可拒绝打开，也不覆盖文件。正在离线编辑时，目标登录可能被暂时拒绝；关闭编辑界面后再登录。不要手工改写正在被插件使用的 playerdata。
 
+## 管理命令
+
+- `/invgive <目标> <物品类型> [数量]`、`/endergive <目标> <物品类型> [数量]`：添加物品，默认 1 个。
+- `/invclear <目标> [物品类型] [数量]`、`/enderclear <目标> [物品类型] [数量]`：按条件清理。省略类型和数量会清空对应管理范围，包括背包装备槽。
+- `/invclone <来源> [目标]`、`/enderclone <来源> [目标]`：读取来源快照并替换目标对应管理范围。游戏内省略目标使用执行者；控制台必须指定目标。
+
+Give、clear 和 clone 有意增加、删除或复制物品，请先确认目标。每条命令记录完整前后快照，再在目标所属线程校验并提交；准备期间目标发生变化时拒绝旧快照覆盖。Give 容量不足会整条拒绝，不会静默丢弃剩余物品。Clone 使用读取时的来源快照，不会冻结或持续同步来源玩家。
+
+当前 give 只支持物品类型和数量，不接受旧附属插件的 NBT / 数据组件参数；多余参数会报错，不会被静默忽略。旧版附属插件 API、多世界背包集成仍不兼容。
+
 ## 权限
 
 | 权限 | 用途 |
@@ -42,8 +52,13 @@
 | `invseeplusplus.bypass-exempt.invsee` | 绕过背包豁免检查 |
 | `invseeplusplus.bypass-exempt.endersee` | 绕过末影箱豁免检查 |
 | `invseeplusplus.recovery` | 查询恢复信息 |
+| `invseeplusplus.give.inventory` / `invseeplusplus.give.enderchest` | 对应的 give 命令 |
+| `invseeplusplus.clear.inventory` / `invseeplusplus.clear.enderchest` | 对应的 clear 命令 |
+| `invseeplusplus.clone.inventory` / `invseeplusplus.clone.enderchest` | 对应的 clone 命令 |
 
 默认查看、编辑、恢复权限授予 OP；豁免与绕过权限默认不授予。离线时无法可靠查询任意权限插件的状态，因此离线访问还要求对应的 `bypass-exempt` 权限。只给可信管理员分配编辑与绕过权限。
+
+保留 `invseeplusplus.view`、`.edit`、`.exempt`、`.bypass-exempt` 及 `invseeplusplus.give.*`、`invseeplusplus.clear.*`、`invseeplusplus.clone.*`、`invseeplusplus.*` 的显式子权限。总通配节点包含豁免、绕过和管理权限，应谨慎授予；恢复权限仍单独分配。未实现的 reload、旧 tabcomplete/API 不因此获得兼容能力。
 
 ## 异常与恢复
 
