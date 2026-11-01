@@ -60,6 +60,10 @@ jobs:
         run: |
           set -euo pipefail
           cd .ci/folia
+          # Opt out of built-in server analytics before the first JVM launch.
+          mkdir -p plugins/bStats
+          printf '%s\n' 'enabled: false' 'serverUuid: 00000000-0000-0000-0000-000000000000' 'logFailedRequests: false' > plugins/bStats/config.yml
+          grep -qx 'enabled: false' plugins/bStats/config.yml
           # Owner explicitly accepted Minecraft EULA + Microsoft Services
           # Agreement for isolated build/runtime validation on 2026-10-31.
           # https://www.minecraft.net/en-us/eula
