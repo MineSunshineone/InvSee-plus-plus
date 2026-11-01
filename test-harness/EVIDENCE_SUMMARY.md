@@ -1,5 +1,11 @@
 # Sanitized validation summary — 2026-11-01
 
+## Current RC2 login-priority validation
+
+See [RC2_LOGIN_RESULTS.md](RC2_LOGIN_RESULTS.md) for paired first-attempt login, offline-view closure, transaction draining and post-handoff online editing results. RC1 login rejection is historical, not current acceptance behavior. Final RC2 SHA256: `e769c90cd1f6d5f6685bda05110407fc0638ff1d13710580fb04be37f5a3b450`;65 production classes match the paired tested candidate. The exact final jar passed first-attempt login/view handoff smokes on both versions.
+
+## Historical RC1 parity baseline
+
 All players, inventories and worlds were generated for disposable isolated localhost testing. **No production player data was used.** Public evidence contains aggregate outcomes and artifact hashes only. Raw logs, player identifiers and saved inventory dumps are retained locally and excluded from publication and distribution archives.
 
 ## Environment and artifact binding

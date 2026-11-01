@@ -104,13 +104,11 @@ public final class OfflineCodecRuntimeChecks {
         java.nio.file.Files.write(file, NbtInventoryCodec.compress(root), java.nio.file.StandardOpenOption.CREATE_NEW);
         ItemStack diamonds = new ItemStack(Material.DIAMOND, 17);
         ItemStack gold = new ItemStack(Material.GOLD_INGOT, 9);
-        try (OfflineStore.Lease lease = store.open(id).get(10, java.util.concurrent.TimeUnit.SECONDS)) {
+        try (OfflineStore.Lease lease = store.open(id).get(10, java.util.concurrent.TimeUnit.SECONDS);
+             OfflineStore.Lease.Transaction transaction = lease.beginTransaction()) {
             require(lease.read(false).get().length == 43, "storage main read");
             require(lease.read(true).get().length == 27, "storage ender read");
             require(store.open(id).isCompletedExceptionally(), "second offline session excluded across kinds");
-            var busy = prelogin(id);
-            store.onPreLogin(busy); store.onPreLoginFinished(busy);
-            require(busy.getLoginResult() != org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "login blocked while editing");
             require(lease.compareAndSet(false, 4, new byte[0], diamonds.serializeAsBytes()).get(), "main CAS");
             require(AtomicPlayerDataFile.needsRecovery(file), "journal retained until transfer ack");
             lease.acknowledgeCommit().get();
@@ -154,6 +152,7 @@ public final class OfflineCodecRuntimeChecks {
             require(lease.compareAndSetContents(false, new byte[42][], new byte[43][]).isCompletedExceptionally(), "batch main rejects truncated snapshot");
             require(store.verifySavedContents(id, true, new byte[28][]).isCompletedExceptionally(), "batch verify rejects extra slots");
             require("untouched".equals(NbtInventoryCodec.decompress(java.nio.file.Files.readAllBytes(file)).getStringOr("invsee-test-sentinel", "")), "unrelated NBT survives whole patches");
+            transaction.close();
             lease.closeAsync().get();
         }
         var admitted = prelogin(id);
@@ -177,12 +176,70 @@ public final class OfflineCodecRuntimeChecks {
         store.onPreLoginFinished(changedIdentity);
         require(changedIdentity.getLoginResult() != org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "changed UUID fails closed");
         try (var lease = store.open(id).get()) { lease.closeAsync().get(); }
+        // An idle spectator yields automatically: login never waits for a human to close a GUI.
         try (var lease = store.open(id).get()) {
-            var reallowed = prelogin(id); store.onPreLogin(reallowed);
-            reallowed.allow(); // Simulate a later HIGHEST listener attempting to bypass the busy denial.
-            store.onPreLoginFinished(reallowed);
-            require(reallowed.getLoginResult() != org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "reallow cannot bypass offline fence");
-            lease.closeAsync().get();
+            require(lease.compareAndSet(false, 0, null, gold.serializeAsBytes()).isCompletedExceptionally(), "unpinned mutation rejected");
+            var idleLogin = prelogin(id); store.onPreLogin(idleLogin); store.onPreLoginFinished(idleLogin);
+            require(idleLogin.getLoginResult() == org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "idle offline lease yields on first login");
+            require(lease.loginRequested().isDone(), "idle GUI gets persistent handoff signal");
+            require(lease.closeAsync().isDone(), "idle lease drains automatically");
+            store.onConnectionClose(connectionClose(id));
+        }
+        // A login cannot interrupt an already admitted protocol between reserve/rollback/ack phases.
+        try (var lease = store.open(id).get(); var pin = lease.beginTransaction()) {
+            var joining = prelogin(id);
+            var login = asyncPrelogin(store, joining);
+            lease.loginRequested().get(5, java.util.concurrent.TimeUnit.SECONDS);
+            try { lease.beginTransaction(); throw new AssertionError("new transaction admitted after login intent"); }
+            catch (IllegalStateException expected) { }
+            require(!login.isDone(), "login waits accepted protocol, not viewer close");
+            require(lease.compareAndSet(false, 4, diamonds.serializeAsBytes(), gold.serializeAsBytes()).get(), "accepted CAS continues after login intent");
+            lease.acknowledgeCommit().get();
+            require(!login.isDone(), "login cannot pass between commit and possible rollback");
+            require(lease.compareAndSet(false, 4, gold.serializeAsBytes(), diamonds.serializeAsBytes()).get(), "accepted rollback continues after login intent");
+            lease.acknowledgeCommit().get();
+            pin.close();
+            login.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            require(joining.getLoginResult() == org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "accepted protocol hands login data over without retry");
+            require(!AtomicPlayerDataFile.needsRecovery(file), "handoff waits durable acknowledgement");
+            store.onConnectionClose(connectionClose(id));
+        }
+        // Deterministic queued-write overlap: neither CAS nor native login may overtake the IO gate.
+        try (var lease = store.open(id).get(); var pin = lease.beginTransaction()) {
+            java.lang.reflect.Field ioField = OfflineStore.class.getDeclaredField("io"); ioField.setAccessible(true);
+            var io = (java.util.concurrent.ThreadPoolExecutor) ioField.get(store);
+            var started = new java.util.concurrent.CountDownLatch(2);
+            var unblock = new java.util.concurrent.CountDownLatch(1);
+            Runnable block = () -> { started.countDown(); try { unblock.await(); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); } };
+            io.execute(block); io.execute(block);
+            var joining = prelogin(id);
+            java.util.concurrent.CompletableFuture<Void> login;
+            java.util.concurrent.CompletableFuture<Boolean> write;
+            try {
+                require(started.await(5, java.util.concurrent.TimeUnit.SECONDS), "queued-CAS test IO gate ready");
+                write = lease.compareAndSet(false, 4, diamonds.serializeAsBytes(), gold.serializeAsBytes());
+                login = asyncPrelogin(store, joining);
+                lease.loginRequested().get(5, java.util.concurrent.TimeUnit.SECONDS);
+                require(!write.isDone() && !login.isDone(), "login and accepted CAS both wait IO gate");
+            } finally { unblock.countDown(); }
+            require(write.get(5, java.util.concurrent.TimeUnit.SECONDS), "queued CAS commits after IO gate release");
+            require(!login.isDone(), "native login still waits queued-write acknowledgement");
+            lease.acknowledgeCommit().get();
+            require(lease.compareAndSet(false, 4, gold.serializeAsBytes(), diamonds.serializeAsBytes()).get(), "queued-write fixture restore");
+            lease.acknowledgeCommit().get();
+            pin.close(); login.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            require(joining.getLoginResult() == org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "queued CAS handoff admits first login");
+            require(!AtomicPlayerDataFile.needsRecovery(file), "queued CAS handoff leaves no pending journal");
+            store.onConnectionClose(connectionClose(id));
+        }
+        // An initially denied event later reallowed still acquires the current identity's fence.
+        try (var lease = store.open(id).get()) {
+            var reallowed = prelogin(id);
+            reallowed.disallow(org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("initial test denial"));
+            store.onPreLogin(reallowed); reallowed.allow(); store.onPreLoginFinished(reallowed);
+            require(reallowed.getLoginResult() == org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "reallow uses login-priority handoff");
+            require(lease.closeAsync().isDone(), "reallow retired old offline lease");
+            store.onConnectionClose(connectionClose(id));
         }
         // Deterministically exercise bounded lease queuing and close while accepted IO is waiting.
         try (var lease = store.open(id).get()) {
@@ -194,20 +251,29 @@ public final class OfflineCodecRuntimeChecks {
             io.execute(block); io.execute(block);
             require(started.await(10, java.util.concurrent.TimeUnit.SECONDS), "test IO workers occupied");
             var reads = new java.util.ArrayList<java.util.concurrent.CompletableFuture<byte[][]>>();
+            var draining = prelogin(id);
+            java.util.concurrent.CompletableFuture<Void> login = null;
             try {
                 for (int i = 0; i < 16; i++) reads.add(lease.read(i % 2 == 0));
                 require(lease.read(false).isCompletedExceptionally(), "per-lease pending limit enforced");
                 lease.close();
                 require(!lease.closeAsync().isDone(), "closing lease retains accepted IO fence");
-                var draining = prelogin(id); store.onPreLogin(draining); store.onPreLoginFinished(draining);
-                require(draining.getLoginResult() != org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "login blocked during IO drain");
+                login = asyncPrelogin(store, draining);
+                lease.loginRequested().get(5, java.util.concurrent.TimeUnit.SECONDS);
+                require(!login.isDone(), "login waits accepted IO drain without rejection");
             } finally { unblock.countDown(); }
             for (var read : reads) read.get(10, java.util.concurrent.TimeUnit.SECONDS);
             lease.closeAsync().get(10, java.util.concurrent.TimeUnit.SECONDS);
+            login.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            require(draining.getLoginResult() == org.bukkit.event.player.AsyncPlayerPreLoginEvent.Result.ALLOWED, "login succeeds after queued IO drains");
+            store.onConnectionClose(connectionClose(id));
         }
         try (var lease = store.open(id).get()) { lease.closeAsync().get(); }
         java.nio.file.Files.delete(file);
-        return "OFFLINE_STORAGE_CHECKS_PASS: main+ender CAS preservation, stale compare, durable ack, exclusive lease, connecting/duplicate/cancelled prelogin and close fence, bounded queue/drain, atomic whole-inventory patch/clear";
+        return "OFFLINE_STORAGE_CHECKS_PASS: main+ender CAS preservation, stale compare, durable ack, exclusive lease, connecting/duplicate/cancelled prelogin and close fence, bounded queue/drain, atomic whole-inventory patch/clear, LOGIN_PRIORITY_HANDOFF";
+    }
+    private static java.util.concurrent.CompletableFuture<Void> asyncPrelogin(OfflineStore store, org.bukkit.event.player.AsyncPlayerPreLoginEvent event) {
+        return java.util.concurrent.CompletableFuture.runAsync(() -> { store.onPreLogin(event); store.onPreLoginFinished(event); });
     }
     private static com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent connectionClose(java.util.UUID id) throws Exception {
         Class<com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent> type = com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent.class;

@@ -2,7 +2,7 @@
 
 This module is independent of the legacy adapter reactor. It does not implement
 the old InvSee++ API and must not run alongside the legacy plugin or its addons.
-Release candidate **0.31.23-folia.1-rc1** enables Folia support after the scoped
+Release candidate **0.31.23-folia.1-rc2** enables Folia support after the scoped
 paired acceptance recorded in `../test-harness/PARITY_RESULTS.md`. This is not
 a blanket production-safety or future-version guarantee.
 
@@ -86,7 +86,7 @@ as part of this plugin source or deliverable.
 
 Additional verified dependency: Folia **26.3 build 6 ALPHA**, launcher SHA-256
 `3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d`.
-Both classpaths pass 101 tests. Live checks use the same 26.2-compiled plugin on
+Both classpaths pass 108 tests. Live checks use the same 26.2-compiled plugin on
 both runtimes; see the committed reports for tested scenarios and limitations.
 
 Before any disposable server startup, opt out of built-in server analytics:

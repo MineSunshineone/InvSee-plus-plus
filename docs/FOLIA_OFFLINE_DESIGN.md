@@ -8,20 +8,36 @@ once to create/migrate their data. Future Minecraft versions require adapter tes
 
 ## Ownership and admission
 
-`OfflineAccessCoordinator` admits exactly one token per UUID, shared by main and
-ender inventory kinds. An offline session retains that token through all accepted
-IO, including IO queued when the view closes. Closing a view is not an early unlock.
-`Lease.closeAsync()` reports when its accepted IO has drained.
+`OfflineAccessCoordinator` admits one owner per UUID across both inventory kinds.
+Player login has priority over an offline inspector. An idle offline lease yields
+automatically and signals the administrator's viewer to close/invalidate; the player
+does not have to retry or wait for an administrator to close the window.
 
-At `AsyncPlayerPreLoginEvent.HIGHEST`, an otherwise allowed connection must reserve
-that same UUID before the server can load player data. A busy UUID gets an explicit
-retry message. At MONITOR, a subsequently denied admission releases its own token;
-a denied duplicate never releases the existing connection's token. Changed UUIDs
-at a later HIGHEST listener are denied at MONITOR and release the original token;
-a re-allowed denial still has to obtain a token. Mutating events after our MONITOR
-callback violates the listener contract and is unsupported. Accepted tokens
-remain through the native final save. They are released on
-`PlayerConnectionCloseEvent`, **not** `PlayerQuitEvent`.
+Every mutating GUI/administrative protocol must call `Lease.beginTransaction()`
+BEFORE preparing its journal or reserving source items. Its `Transaction` pin lives
+through the terminal commit/rollback and durable acknowledgement. Login intent
+atomically blocks new offline leases and new transaction pins, but an already
+accepted pin can still perform later CAS, rollback and acknowledgement calls. The
+lease transfers ownership to the pending login only after all pins and accepted IO
+have drained. `Lease.loginRequested()` is a persistent notification, and
+`Lease.closeAsync()` reports the final drain; neither is an early unlock.
+
+`AsyncPlayerPreLoginEvent.HIGHEST` waits for that handoff only on the asynchronous
+authentication worker, bounded to 15 seconds. Region/global tick threads are
+explicitly rejected from this waiting path. Exact 26.2 and 26.3 bytecode confirms
+`Bukkit.isPrimaryThread()` maps to `TickThread.isTickThread()` and native player-data
+loading happens after pre-login returns. Normal editing is not a login-denial
+reason. A disk/quarantine failure, interrupted synchronization, duplicate login or
+an exceeded deadline has separate safety-error semantics; an ambiguous write is
+never exposed as successfully synchronized data. Timed-out requests cancel pending
+admission and release any late-granted token.
+
+At MONITOR, a subsequently denied admission releases its own token. A duplicate
+never releases the existing connection's token. A changed UUID is denied and the
+original token released; a reallowed denial must still obtain the correct fence.
+Mutating events after our MONITOR callback violates the listener contract and is
+unsupported. Accepted login tokens remain through the native final save, releasing
+on `PlayerConnectionCloseEvent`, **not** `PlayerQuitEvent`.
 
 The exact 26.2 source ordering was checked. Authentication/Velocity dispatches
 pre-login before client verification; `PrepareSpawnTask.start` loads player data
@@ -37,7 +53,8 @@ only later during configuration:
 
 Do not hot-reload/re-enable this adapter into a server with pre-existing in-flight
 logins. Initial server startup is the supported registration boundary. Shutdown
-stops admission and drains **only its own disk workers** before returning, so Bukkit
+first stops/completes accepted transfer observations, then the offline barrier
+stops admission and drains its disk workers before returning, so Bukkit
 cannot remove the admission listener while a plugin disk write is still active.
 No normal operation blocks a region waiting for another region or disk operation.
 
@@ -62,8 +79,11 @@ adapter and rewriting the same player file.
    synchronize, then clean it up. Interrupted acknowledgement cleanup is harmless.
 
 Any error with a pending journal is indeterminate, **not** an invitation to retry
-or restore items automatically. The UUID remains blocked for login and offline
-edits. Startup discovers these journals before admission. `inspect()` compares the
+or restore items automatically. Unresolved failed/crashed records remain
+quarantined for offline edits and produce a distinct recovery error at login.
+A healthy live commit merely awaiting acknowledgement is NOT a busy denial: login
+waits for its pinned protocol to finish, then rechecks recovery state. Startup
+discovers unresolved journals before admission. `inspect()` compares the
 live bytes to the before/after images without changing any file. Conflicting or
 partially prepared records retain evidence. Recovery must reconcile the transfer
 ledger and both inventories; blindly copying a before/after image can duplicate or
@@ -82,18 +102,21 @@ not the durability of arbitrary future native autosaves.
 or 27 ender slots and deep-copies all item bytes at admission. It checks every
 expected slot before editing the local NBT, then uses one atomic file transaction.
 The other inventory kind, unrelated root tags, and unchanged item tags are kept.
-A stale comparison returns false without writing a journal. The transfer layer
-must still durably record its phase before `acknowledgeCommit()`.
+A stale comparison returns false without writing a journal. The caller must hold
+a `Lease.Transaction` pin from before preparation through terminal acknowledgement;
+the transfer layer must durably record its phase before `acknowledgeCommit()`.
 
 `verifySavedContents` checks all managed slots in the same forced descriptor
 snapshot for an owner-thread online save. Both APIs preserve the normal journal
 acknowledgement contract, including no-op replacements. A command layer may avoid
 no-op patches before it prepares a transaction.
 
+### Historical reconstructed RC1 validation
+
 These APIs and their additional tests were reconstructed on 2026-11-01 from the
 author's retained implementation history after the workspace rollback. Commit
 `9307c134` is the new reconstruction, not a claim of byte-identical restoration of
-the lost parity commits. Current revalidation: offline production and tests compile
+the lost parity commits. RC1 reconstruction revalidation: offline production and tests compile
 against the official 26.2 and 26.3 runtimes; all 21 offline-package JUnit tests pass
 on each (14 persistence/snapshot tests plus seven name-resolver tests).
 
@@ -126,7 +149,43 @@ registry. Item bytes use Bukkit's compressed-NBT serialization with DataVersion.
 Both null and an empty byte array represent an empty endpoint slot. Cursor and
 crafting are not persisted by this adapter.
 
-## Verification evidence
+## RC2 login-priority validation
+
+Commit `46cc5f1e` implements the priority handoff and explicit protocol pins. The
+offline package passes 28 unit tests, including atomic owner transfer, duplicate
+requests, cancellation before/after grant, shutdown, callback lock ordering, and
+200 concurrent cancellation/handoff races.
+
+Fresh initialized-server RC2 checks passed on both Folia 26.2 and 26.3 on
+2026-11-01 using the same verified production binary, SHA-256
+`50d90c3f3119573da783cfe27e6da8e64d79d9ca2b6986f8186309615f509cc5`.
+The final test helper explicitly covers:
+
+- idle offline inspector yielding automatically on the first login attempt;
+- refusal of new pins after login intent without interrupting an admitted pin;
+- later CAS, durable acknowledgement, rollback and acknowledgement while login waits;
+- a queued CAS held behind both IO workers, then commit/acknowledgement/pin release
+  before login is admitted, with no pending disk journal left;
+- bounded read-queue draining before handoff, mutable identity and duplicate/cancel
+  admission cleanup, and main/ender whole-inventory patch preservation.
+
+Real-client tests on both 26.2 and 26.3 additionally passed first-attempt login
+during idle main/ender inspectors and deliberately delayed four-second pinned
+administrative/GUI operations. Accepted work reached a terminal commit or safe
+conflict before the login completed; reopening an online inspector then supported
+metadata-preserving editing. No automatic reconnect or manual login retry was used.
+These controlled-delay observations are not sustained-load performance benchmarks.
+
+The 26.3 harness also recorded two premature cleanup/busy assertion failures; the
+corrected cleanup was verified, but that run is not represented as zero-error.
+See `test-harness/RC2_LOGIN_RESULTS.md` for the complete matrix and limitations.
+These results establish normal login priority, not universal immunity to disk
+failure or an exceeded synchronization deadline.
+
+## Historical RC1 verification evidence
+
+The following records describe the previous retry-on-busy admission behavior.
+They are retained as history, not as RC2 login-priority acceptance evidence.
 
 - Twelve focused Java-only tests cover exclusive UUID admission, 200 simultaneous
   login/offline races, stale token release, shutdown admission, atomic before/after

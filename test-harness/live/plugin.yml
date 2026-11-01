@@ -28,3 +28,6 @@ commands:
   plannercheck:
     description: Native detached snapshot planner checks, console only
     usage: plannercheck
+  journalhold:
+    description: Bounded isolated journal-queue delay for login drain tests, console only
+    usage: journalhold

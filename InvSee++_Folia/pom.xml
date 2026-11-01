@@ -9,7 +9,7 @@
     <relativePath>../pom.xml</relativePath>
   </parent>
   <artifactId>invsee-plus-plus_folia</artifactId>
-  <version>0.31.23-folia.1-rc1</version>
+  <version>0.31.23-folia.1-rc2</version>
   <name>InvSee++ isolated Folia implementation</name>
   <description>Transactional inventory editing for tested Folia 26.2 and 26.3 builds.</description>
   <properties>

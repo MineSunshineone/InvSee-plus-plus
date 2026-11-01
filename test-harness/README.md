@@ -2,6 +2,8 @@
 
 ## Recorded execution
 
+Current login-priority acceptance: [RC2_LOGIN_RESULTS.md](RC2_LOGIN_RESULTS.md). Old login-denial cases are historical only; `expectblocked` refuses to run for RC2.
+
 Sanitized aggregate results and final artifact binding: **[EVIDENCE_SUMMARY.md](EVIDENCE_SUMMARY.md)**. Raw runtime evidence is local-only, excluded from source/distribution archives. All fixtures are disposable synthetic test-player data, not production data.
 
 Latest fresh-workspace paired26.2/26.3 administrative and GUI evidence: **[PARITY_RESULTS.md](PARITY_RESULTS.md)**. Historical baseline results below must not be treated as proof for a different artifact.

@@ -39,9 +39,9 @@ async function connect(name) {
   bot.physicsEnabled = false
   return bot
 }
-async function inspect(bot, target='InvTarget') {
+async function inspect(bot, target='InvTarget', command='invsee') {
   if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
-  await delay(200); bot.chat('/invsee '+target)
+  await delay(200); bot.chat('/'+command+' '+target)
   return await waitFor(()=>bot.currentWindow)
 }
 async function race() {
@@ -84,6 +84,7 @@ async function main() {
       if(cmd==='status') log('status',{counts:counts(),positions:bots.map(b=>({name:b.username,position:b.entity?.position}))})
       else if(cmd==='race') await race()
       else if(cmd==='inspect') await inspect(bot,args[0])
+      else if(cmd==='inspectender') await inspect(bot,args[0],'endersee')
       else if(cmd==='admin') await admin(bot,args.join(' '))
       else if(cmd==='assert') {const expected=[who,...args].map(Number);await waitFor(()=>bots.every((b,i)=>count(b)===expected[i]));await delay(200);if(!bots.every((b,i)=>count(b)===expected[i]))throw Error('unstable count assertion');log('PASS-counts',{expected,counts:counts()})}
       else if(cmd==='adminrace') {const before=count(bots[0]);const results=await Promise.all([admin(bots[1],'/invgive InvTarget diamond 1',false),admin(bots[2],'/invgive InvTarget diamond 1',false)]);const added=results.filter(x=>x.endsWith(': COMPLETED')).length;await waitFor(()=>count(bots[0])===before+added);log('PASS-administrative-race',{before,added,after:count(bots[0]),results})}
@@ -96,9 +97,21 @@ async function main() {
       }
       else if(cmd==='close') { if(bot.currentWindow)bot.closeWindow(bot.currentWindow) }
       else if(cmd==='window') log('window-snapshot',{player:bot.username,slots:bot.currentWindow?.slots.map((item,slot)=>item?{slot,name:item.name,count:item.count}:null).filter(Boolean),cursor:bot.currentWindow?.selectedItem})
-      else if(cmd==='expectblocked') {
-        let blocked=false;try { const unexpected=await connect(names[{T:0,A:1,B:2}[who]]);unexpected.quit('unexpected admission') } catch(e) { if(!String(e).includes('inventory is being edited'))throw e;blocked=true }
-        if(!blocked)throw Error('Expected login rejection but player admitted');log('PASS-login-fence',{player:who})
+      else if(cmd==='expectblocked') throw Error('Obsolete RC1 login-rejection test: RC2 requires first-attempt handoff; no connection attempted')
+      else if(cmd==='loginonce') {
+        const index={T:0,A:1,B:2}[who],expected=Number(args[0]),start=performance.now()
+        if(!Number.isInteger(expected)||expected<0)throw Error('loginonce requires expected diamond count; no connection attempted')
+        // Exactly one connect call. No automatic reconnect or manual retry on failure.
+        const connected=await connect(names[index]);bots[index]=connected
+        let ended=false;connected.once('end',()=>{ended=true})
+        await waitFor(()=>count(connected)===expected)
+        await delay(500)
+        if(ended||count(connected)!==expected)throw Error('Login did not retain expected inventory/session')
+        log('PASS-first-attempt-login',{player:who,attempts:1,expected,elapsedMs:performance.now()-start})
+      }
+      else if(cmd==='assertclosed') {
+        await waitFor(()=>!bot.currentWindow)
+        log('PASS-inspector-closed',{player:who})
       }
       else if(cmd==='reconnect') { bots[{T:0,A:1,B:2}[who]]=await connect(names[{T:0,A:1,B:2}[who]]);log('reconnected',{player:who}) }
       else if(cmd==='quit') bot.quit('test disconnect')

@@ -118,8 +118,11 @@ final class AdministrativeCommands implements CommandExecutor {
                 .whenComplete((unused, error) -> plugin.releaseTarget(source, operation));
     }
     private static <T> CompletableFuture<T> use(Handle handle, java.util.function.Function<InventoryAccess, CompletableFuture<T>> work) {
-        return CompletableFuture.completedFuture(null).thenCompose(unused -> work.apply(handle.access))
-                .whenComplete((result, error) -> handle.access.close());
+        return CompletableFuture.completedFuture(null).thenCompose(unused -> {
+            Runnable release = handle.access.beginOperation();
+            return CompletableFuture.completedFuture(null).thenCompose(ignored -> work.apply(handle.access))
+                    .whenComplete((result, error) -> release.run());
+        }).whenComplete((result, error) -> handle.access.close());
     }
     private PatchEndpoint admitted(PatchEndpoint delegate, CommandSender sender, String permission, boolean ender,
                                    boolean requireBypass, UUID source) {

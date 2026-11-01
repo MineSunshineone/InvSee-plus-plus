@@ -31,6 +31,27 @@ public final class LiveOwnerProbe extends JavaPlugin {
             }).whenComplete((v,e) -> getLogger().info("METADATA SEED: " + (e == null ? "created3 diamonds slot9 intentionally" : e)));
             return true;
         }
+        if (command.getName().equals("journalhold") && args.length == 0) {
+            Bukkit.getAsyncScheduler().runNow(this, ignored -> {
+                CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+                try {
+                    var production = Bukkit.getPluginManager().getPlugin("InvSeePlusPlusFolia");
+                    var field = production.getClass().getDeclaredField("journalExecutor");
+                    field.setAccessible(true); // Test-only bounded delay; production checks unchanged.
+                    ThreadPoolExecutor executor = (ThreadPoolExecutor) field.get(production);
+                    executor.execute(() -> { entered.countDown(); try { release.await(15, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } });
+                    require(entered.await(2, TimeUnit.SECONDS), "journal hold did not start");
+                    getLogger().info("JOURNALHOLD READY: waiting for one quiet-test journal operation");
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+                    while (executor.getQueue().isEmpty() && System.nanoTime() < deadline) Thread.sleep(10);
+                    require(!executor.getQueue().isEmpty(), "no journal operation queued");
+                    getLogger().info("JOURNALHOLD QUEUED: holding4seconds; this is not a disk fsync barrier");
+                    Thread.sleep(4000);
+                } catch (Throwable e) { getLogger().log(java.util.logging.Level.SEVERE, "JOURNALHOLD INCONCLUSIVE", e); }
+                finally { getLogger().info("JOURNALHOLD RELEASE"); release.countDown(); }
+            });
+            return true;
+        }
         if (command.getName().equals("phaseguard") && args.length == 2) {
             Player actor = Bukkit.getPlayerExact(args[0]);
             if (actor == null) return false;

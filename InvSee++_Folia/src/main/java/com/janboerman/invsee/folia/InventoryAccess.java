@@ -16,6 +16,10 @@ interface InventoryAccess extends AutoCloseable {
     SlotEndpoint slot(int index);
     PatchEndpoint patch();
     void close();
+    /** Pins a complete protocol, including rollback and durable acknowledgement. */
+    default Runnable beginOperation() { return () -> {}; }
+    default boolean loginPending() { return false; }
+
 
     static byte[] bytes(ItemStack item) {
         return item == null || item.getType().isAir() || item.getAmount() <= 0 ? null : item.serializeAsBytes();
@@ -123,6 +127,12 @@ interface InventoryAccess extends AutoCloseable {
         private final boolean ender;
         Offline(UUID id, OfflineStore.Lease lease, boolean ender) { this.id = id; this.lease = lease; this.ender = ender; }
         public UUID id() { return id; }
+        public Runnable beginOperation() {
+            OfflineStore.Lease.Transaction transaction = lease.beginTransaction();
+            return transaction::close;
+        }
+        public boolean loginPending() { return lease.loginRequested().isDone(); }
+        CompletableFuture<Void> loginRequested() { return lease.loginRequested(); }
         public CompletableFuture<byte[][]> read() { return lease.read(ender); }
         public SlotEndpoint slot(int index) {
             return new SlotEndpoint() {

@@ -5,7 +5,7 @@
 
 `InvSee++_Folia` is the separate Folia implementation; it does **not** execute the
 legacy shared NMS mirror/API paths below. The release candidate is
-`0.31.23-folia.1-rc1` (`InvSee++-Folia.jar`), for **Java 25 and the explicit
+`0.31.23-folia.1-rc2` (`InvSee++-Folia.jar`), for **Java 25 and the explicit
 Minecraft/Folia 26.2 / 26.3 allowlist**. New versions require separate verification,
 not merely an edited version check. The legacy plugin remains disabled for Folia.
 
@@ -15,36 +15,51 @@ UUID-wide offline login fencing, checked persistence, and recoverable escrow.
 Online and offline main/ender inventories are supported; ambiguous persistence
 outcomes are quarantined rather than blindly replayed.
 
-### Verified scope (2026-11-01)
+### RC2 login-priority behavior
 
-- Production and tests compile against official Folia **26.2 build 7 BETA** and
-  **26.3 build 6 ALPHA**; **101 tests pass on each classpath**.
-- The same 26.2-compiled candidate passed the full fresh-world 26.2 suite and the
-  targeted 26.3 confirmation: real GUI editing, all six administrative commands,
-  offline admission, component-preserving cloning, permission revocation,
-  console authorization with blanket console permissions disabled, and stale
-  click packets after plugin disable. Native equipment/planner/offline-storage
-  checks pass on both versions.
-- The full latest-binary distinct-region race suite ran on 26.2. The earlier full
-  26.3 race suite used the preceding candidate; it is **not** presented as a full
-  latest-binary 26.3 rerun. Real clients used the official ViaVersion/ViaBackwards
-  protocol bridge from 26.1, not native 26.2/26.3 clients.
-- Latest 26.2 patch audit: 19 records, 17 completed / 2 conflicts / 0 unresolved.
-  The 26.3 fixture accumulated 33 records, 29 completed / 4 conflicts / 0 unresolved;
-  that total includes the preceding run. See the exact artifact hashes, evidence,
-  fixture accounting and observed limitations in
-  [`test-harness/PARITY_RESULTS.md`](../test-harness/PARITY_RESULTS.md).
+Normal offline editing no longer rejects a player's login merely because an
+administrator has the inspector open. Login immediately reserves admission,
+invalidates the offline inspector, and closes it on the administrator's owner
+thread. Already-admitted protocols retain a pin through commit, rollback and
+acknowledgement. The asynchronous authentication worker waits for their drain
+before the server reads player data; region threads do not wait for login.
+The administrator can reopen after the player joins and edit concurrently through
+owner-thread compare-and-set validation. A stale edit conflicts instead of
+overwriting the player's newer changes.
 
-Final RC1 packaging passed: all 63 production class entries are byte-identical to
-the tested candidate, and the exact final jar enabled and completed console
-main/ender give/clear smoke operations on both versions before graceful shutdown.
+The synchronization deadline is 15 seconds. Timeout, shutdown, duplicate login or
+unresolved persistence recovery can still fail closed with a distinct error;
+this is not the old normal-edit-busy rejection policy. A racing admin operation
+may be refused or conflict. The view is not automatically reopened after join.
+
+### Verified RC2 scope (2026-11-01)
+
+- **108 tests pass** against each official Folia **26.2 build 7 BETA** and
+  **26.3 build 6 ALPHA** classpath.
+- The same 26.2-compiled candidate passed actual-client tests on both versions:
+  idle main/ender inspector first-attempt login, inspector closure, selected-source
+  invalidation and stale-packet rejection, login during a pinned administrative
+  operation, safe conflict for a delayed GUI operation, online reopening and
+  metadata-preserving transfer, and conflict against an actual target-owner edit.
+- Initialized storage probes on both versions exercise a queued CAS, login wait,
+  and rollback/acknowledgement while login has priority. Artificial journal holds
+  test ordering, not natural latency or a sustained-load benchmark.
+- Clients used official ViaVersion/ViaBackwards translation from 26.1, not native
+  26.2/26.3 clients. See
+  [`RC2 login results`](../test-harness/RC2_LOGIN_RESULTS.md) for exact evidence and
+  final-package binding. Earlier broad administrative/GUI coverage remains
+  documented in [`RC1 parity results`](../test-harness/PARITY_RESULTS.md); those
+  historical runs are not relabeled as RC2 execution.
+
+Final RC2 jar SHA-256:
+`e769c90cd1f6d5f6685bda05110407fc0638ff1d13710580fb04be37f5a3b450`.
+All 65 production classes match the tested candidate. The exact packaged jar
+passed first-attempt login, offline-view closure and online-view reopening smokes
+on both versions, with graceful shutdown. Full suites were not repeated after
+metadata-only packaging.
+
 The new module's `folia-supported: true` gate is enabled; the legacy gate stays
-false. Final jar SHA-256:
-`4fbb0f66dc4fb1e10813f16de016acb5d09d5b482c8c7a220c59819cba15e70e`.
-Full suites were not repeated after metadata-only packaging. See
-[sanitized RC1 evidence summary](../test-harness/EVIDENCE_SUMMARY.md) for final smoke outcomes and
-per-class hashes. The standalone support flag does not make the legacy plugin or
-its addons safe.
+false. The standalone support flag does not make the legacy plugin or addons safe.
 
 ### Explicit boundaries
 

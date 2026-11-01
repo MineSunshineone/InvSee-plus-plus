@@ -204,12 +204,14 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         })).whenComplete((loaded, error) -> {
             if (error != null) { reply(viewer, "Could not open inventory: " + describe(error)); openRequests.remove(viewer.getUniqueId(), request); return; }
             PlayerTasks.call(this, viewer, () -> {
-                if (!accepting || !openRequests.remove(viewer.getUniqueId(), request) || !isEmpty(viewer.getItemOnCursor())
+                if (!accepting || loaded.access.loginPending() || !openRequests.remove(viewer.getUniqueId(), request) || !isEmpty(viewer.getItemOnCursor())
                         || !viewer.hasPermission("invseeplusplus." + type + ".view")
                         || (bypass && !viewer.hasPermission("invseeplusplus.bypass-exempt." + type))) {
+                    openRequests.remove(viewer.getUniqueId(), request);
                     loaded.access.close(); return null;
                 }
                 Session session = new Session(viewer, loaded.access, ender, bypass);
+                if (session.closed || loaded.access.loginPending()) { session.close(); return null; }
                 session.render(loaded.contents);
                 if (!ProtectedMenu.open(this, viewer, session.inventory, ender ? "Folia Ender Inspector" : "Folia Inventory Inspector")) { session.close(); return null; }
                 Session old = sessions.put(viewer.getUniqueId(), session);
@@ -533,12 +535,26 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
         volatile boolean busy, closed;
         volatile long revision;
         private boolean released;
+        private Runnable releaseOperation;
         private final java.util.concurrent.atomic.AtomicBoolean refreshing = new java.util.concurrent.atomic.AtomicBoolean();
         private io.papermc.paper.threadedregions.scheduler.ScheduledTask refreshTask;
         Session(Player viewer, InventoryAccess access, boolean ender, boolean bypass) {
             this.viewer = viewer; this.access = access; this.ender = ender;
             this.requireBypass = bypass || access instanceof InventoryAccess.Offline;
             inventory = Bukkit.createInventory(this, 54, "Folia Inspector");
+            if (access instanceof InventoryAccess.Offline offlineAccess) {
+                offlineAccess.loginRequested().thenRun(() -> {
+                    // Invalidate admission immediately, but let any admitted protocol finish.
+                    close();
+                    PlayerTasks.call(FoliaInvSeePlugin.this, viewer, () -> {
+                        if (viewer.getOpenInventory().getTopInventory().getHolder() == this) {
+                            viewer.closeInventory();
+                            viewer.sendMessage("The player is joining. Offline editing has ended; reopen after they join to edit online.");
+                        }
+                        return null;
+                    }).exceptionally(error -> null);
+                });
+            }
         }
         public Inventory getInventory() { return inventory; }
         /** Called only on the viewer owner thread. Opening grants are revalidated. */
@@ -568,7 +584,9 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
             if (refreshTask == null) close();
         }
         synchronized boolean beginTransfer() {
-            if (closed || busy || released) return false;
+            if (closed || busy || released || access.loginPending()) return false;
+            try { releaseOperation = access.beginOperation(); }
+            catch (IllegalStateException refused) { close(); return false; }
             revision++;
             busy = true; return true;
         }
@@ -577,7 +595,13 @@ public final class FoliaInvSeePlugin extends JavaPlugin implements Listener, Com
             if (refreshTask != null) refreshTask.cancel();
             releaseIfReady();
         }
-        synchronized void finishTransfer() { busy = false; releaseIfReady(); }
+        synchronized void finishTransfer() {
+            busy = false;
+            if (releaseOperation != null) {
+                Runnable release = releaseOperation; releaseOperation = null; release.run();
+            }
+            releaseIfReady();
+        }
         private void releaseIfReady() { if (closed && !busy && !released) { released = true; access.close(); } }
     }
 }
