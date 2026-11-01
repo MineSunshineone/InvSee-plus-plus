@@ -466,7 +466,7 @@ public class InvseeAPI {
             }
         });
         pendingInventoriesByName.put(targetName, future);
-        future.whenComplete((result, error) -> pendingInventoriesByName.remove(targetName));
+        future.whenComplete((result, error) -> pendingInventoriesByName.remove(targetName, future));
         return future;
     }
 
@@ -562,14 +562,11 @@ public class InvseeAPI {
 
         //map to SpectateResponse and cache if success
         CompletableFuture<SpectateResponse<MainSpectatorInventory>> future = combinedFuture.<SpectateResponse<MainSpectatorInventory>>thenApply(eitherReasonOrInventory -> {
-            eitherReasonOrInventory.ifSuccess(openSpectatorsCache::cache);
-            return eitherReasonOrInventory;
-        }).handleAsync((success, error) -> {
-            if (error == null) return success;
-            return Rethrow.unchecked(error);
-        }, runnable -> scheduler.executeSyncPlayer(playerId, runnable, null));
+            if (!eitherReasonOrInventory.isSuccess()) return eitherReasonOrInventory;
+            return SpectateResponse.succeed(openSpectatorsCache.cacheAndGet(eitherReasonOrInventory.getInventory()));
+        }).thenCompose(response -> scheduler.supplySyncPlayer(playerId, () -> response));
         pendingInventoriesByUuid.put(playerId, future);
-        future.whenComplete((result, error) -> pendingInventoriesByUuid.remove(playerId));
+        future.whenComplete((result, error) -> pendingInventoriesByUuid.remove(playerId, future));
         return future;
     }
 
@@ -719,7 +716,7 @@ public class InvseeAPI {
             }
         });
         pendingEnderChestsByName.put(targetName, future);
-        future.whenComplete((result, error) -> pendingEnderChestsByName.remove(targetName));
+        future.whenComplete((result, error) -> pendingEnderChestsByName.remove(targetName, future));
         return future;
     }
 
@@ -811,59 +808,36 @@ public class InvseeAPI {
 
         //map to SpectateResult and cache if success
         CompletableFuture<SpectateResponse<EnderSpectatorInventory>> future = combinedFuture.<SpectateResponse<EnderSpectatorInventory>>thenApply(eitherReasonOrInventory -> {
-            eitherReasonOrInventory.ifSuccess(openSpectatorsCache::cache);
-            return eitherReasonOrInventory;
-        }).handleAsync((success, error) -> {
-            if (error == null) return success;
-            return Rethrow.unchecked(error);
-        }, runnable -> scheduler.executeSyncPlayer(playerId, runnable, null));
+            if (!eitherReasonOrInventory.isSuccess()) return eitherReasonOrInventory;
+            return SpectateResponse.succeed(openSpectatorsCache.cacheAndGet(eitherReasonOrInventory.getInventory()));
+        }).thenCompose(response -> scheduler.supplySyncPlayer(playerId, () -> response));
         pendingEnderChestsByUuid.put(playerId, future);
-        future.whenComplete((result, error) -> pendingEnderChestsByUuid.remove(playerId));
+        future.whenComplete((result, error) -> pendingEnderChestsByUuid.remove(playerId, future));
         return future;
     }
 
     // ================================== Open Main/Ender Inventory ==================================
 
-    private final CompletableFuture<OpenResponse<MainSpectatorInventoryView>> spectateInventory(Player spectator, CompletableFuture<SpectateResponse<MainSpectatorInventory>> future, CreationOptions<PlayerInventorySlot> options) {
-        final CompletableFuture<OpenResponse<MainSpectatorInventoryView>> result = new CompletableFuture<>();
-        future.whenComplete((SpectateResponse<MainSpectatorInventory> response, Throwable throwable) -> {
-            if (throwable == null) {
-                if (response.isSuccess()) {
-                    try {
-                        OpenResponse<MainSpectatorInventoryView> openResponse = platform.openMainSpectatorInventory(spectator, response.getInventory(), options);
-                        result.complete(openResponse);
-                    } catch (Throwable ex) {
-                        result.completeExceptionally(ex);
-                    }
-                } else {
-                    result.complete(OpenResponse.closed(NotOpenedReason.notCreated(response.getReason())));
-                }
-            } else {
-                result.completeExceptionally(throwable);
-            }
+    private CompletableFuture<OpenResponse<MainSpectatorInventoryView>> spectateInventory(Player spectator, CompletableFuture<SpectateResponse<MainSpectatorInventory>> future, CreationOptions<PlayerInventorySlot> options) {
+        return future.thenCompose(response -> {
+            if (!response.isSuccess()) return CompletableFuture.completedFuture(OpenResponse.closed(NotOpenedReason.notCreated(response.getReason())));
+            return scheduler.supplySyncPlayer(spectator.getUniqueId(), () -> {
+                // The UUID may have disappeared while resolving the target. Never
+                // open a stale Player object on the global/offline fallback path.
+                if (!spectator.isOnline()) throw new CancellationException("Spectator disconnected before inventory opened");
+                return platform.openMainSpectatorInventory(spectator, response.getInventory(), options);
+            });
         });
-        return result;
     }
 
-    private final CompletableFuture<OpenResponse<EnderSpectatorInventoryView>> spectateEnderChest(Player spectator, CompletableFuture<SpectateResponse<EnderSpectatorInventory>> future, CreationOptions<EnderChestSlot> options) {
-        final CompletableFuture<OpenResponse<EnderSpectatorInventoryView>> result = new CompletableFuture<>();
-        future.whenComplete((SpectateResponse<EnderSpectatorInventory> response, Throwable throwable) -> {
-            if (throwable == null) {
-                if (response.isSuccess()) {
-                    try {
-                        OpenResponse<EnderSpectatorInventoryView> openResponse = platform.openEnderSpectatorInventory(spectator, response.getInventory(), options);
-                        result.complete(openResponse);
-                    } catch (Throwable ex) {
-                        result.completeExceptionally(ex);
-                    }
-                } else {
-                    result.complete(OpenResponse.closed(NotOpenedReason.notCreated(response.getReason())));
-                }
-            } else {
-                result.completeExceptionally(throwable);
-            }
+    private CompletableFuture<OpenResponse<EnderSpectatorInventoryView>> spectateEnderChest(Player spectator, CompletableFuture<SpectateResponse<EnderSpectatorInventory>> future, CreationOptions<EnderChestSlot> options) {
+        return future.thenCompose(response -> {
+            if (!response.isSuccess()) return CompletableFuture.completedFuture(OpenResponse.closed(NotOpenedReason.notCreated(response.getReason())));
+            return scheduler.supplySyncPlayer(spectator.getUniqueId(), () -> {
+                if (!spectator.isOnline()) throw new CancellationException("Spectator disconnected before ender chest opened");
+                return platform.openEnderSpectatorInventory(spectator, response.getInventory(), options);
+            });
         });
-        return result;
     }
 
     // ================================== Event Stuff ==================================
@@ -943,9 +917,8 @@ public class InvseeAPI {
             UUID uuid = player.getUniqueId();
             lookup.cacheNameAndUniqueId(uuid, player.getName());
 
-            //no need to remove open inventories (and enderchests) from the openInventories cache, since we're using a weak reference to the UUID of the target inventory as the map key.
-            //As soon as no player is spectating that inventory anymore and the JVM garbage collects the SpectatorInventory, the entry will be evicted from the openInventories cache automatically.
-            //This *REQUIRES* that the UUIDs used by SpectatorInventories are copies of the UUIDs of the Players. See UUIDHelper#copy(UUID).
+            // The cache holds weak values, so closed inventories can be collected.
+            // Equal UUID instances cannot cause a still-open inventory to be evicted.
         }
 
         //TODO as Paper may introduce creating multiple nms ServerPlayer objects for the same CraftPlayer,

@@ -6,6 +6,8 @@
 
 #Maven
 target/*
+**/target/
+.ci/
 
 #paper-nms-maven-plugin
 **/.paper-nms
@@ -14,3 +16,7 @@ target/*
 **/.settings/*
 **/.project
 **/.classpath
+
+/logs/
+
+/test-harness/evidence/

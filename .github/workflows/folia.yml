@@ -1,0 +1,106 @@
+name: Folia isolated build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['folia-*']
+  pull_request:
+    paths:
+      - 'InvSee\+\+_Folia/**'
+      - '.github/workflows/folia.yml'
+      - 'pom.xml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: folia-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Folia ${{ matrix.minecraft }} exact runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minecraft: '26.2'
+            build: '7'
+            sha256: '128a634192261cd38bb4a5dc54075018a0f896fd6c6f529e37dca6e99e32b3b3'
+          - minecraft: '26.3'
+            build: '6'
+            sha256: '3d0a694905ddd9ec956af52259d555274ab8d3191871296d7094c290b686920d'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: microsoft
+          java-version: '25'
+      - name: Download checksum-pinned official runtime and test libraries
+        shell: bash
+        env:
+          MC_VERSION: ${{ matrix.minecraft }}
+          BUILD: ${{ matrix.build }}
+          EXPECTED_SHA256: ${{ matrix.sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p .ci/folia
+          curl --fail --location --retry 2 --max-time 180             -H "User-Agent: InvSeeFoliaCI/1.0 (https://github.com/MineSunshineone/InvSee-plus-plus)"             "https://fill-data.papermc.io/v1/objects/$EXPECTED_SHA256/folia-$MC_VERSION-$BUILD.jar"             -o .ci/folia/server.jar
+          echo "$EXPECTED_SHA256  .ci/folia/server.jar" | sha256sum --check
+          # Maven Central may rate-limit shared hosted-runner IPs; back off, never skip hashes.
+          curl --fail --location --retry 6 --retry-delay 20 --retry-max-time 300 --connect-timeout 15 --max-time 60             https://repo.maven.apache.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar             -o .ci/junit-console.jar
+          echo "a1de557821293ce903c213c694165fff532cf92081bac4238b9e05b35f04f43f  .ci/junit-console.jar" | sha256sum --check
+          curl --fail --location --retry 6 --retry-delay 20 --retry-max-time 300 --connect-timeout 15 --max-time 60             https://repo.maven.apache.org/maven2/org/jetbrains/annotations/26.0.2/annotations-26.0.2.jar             -o .ci/annotations.jar
+          echo "2037be378980d3ba9333e97955f3b2cde392aa124d04ca73ce2eee6657199297  .ci/annotations.jar" | sha256sum --check
+      - name: Materialize official server dependencies, then stop
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .ci/folia
+          # Opt out of built-in server analytics before the first JVM launch.
+          mkdir -p plugins/bStats
+          printf '%s\n' 'enabled: false' 'serverUuid: 00000000-0000-0000-0000-000000000000' 'logFailedRequests: false' > plugins/bStats/config.yml
+          grep -qx 'enabled: false' plugins/bStats/config.yml
+          # Owner explicitly accepted Minecraft EULA + Microsoft Services
+          # Agreement for isolated build/runtime validation on 2026-10-31.
+          # https://www.minecraft.net/en-us/eula
+          # https://www.microsoft.com/servicesagreement
+          printf 'eula=true\n' > eula.txt
+          printf '%s\n'             'server-ip=127.0.0.1' 'server-port=25579' 'online-mode=true'             'white-list=true' 'enforce-whitelist=true' 'max-players=1'             'enable-rcon=false' 'enable-query=false' 'view-distance=2'             'simulation-distance=2' 'generate-structures=false'             'level-name=ci-disposable-world' > server.properties
+          mkfifo console.in
+          exec 3<>console.in
+          timeout 180s java -Xms512M -Xmx2G -jar server.jar --nogui <console.in >startup.log 2>&1 &
+          SERVER_PID=$!
+          trap 'echo stop >&3; kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if grep -q 'Done (' startup.log; then break; fi
+            kill -0 "$SERVER_PID" || { cat startup.log; exit 1; }
+            sleep 1
+          done
+          grep -q 'Done (' startup.log || { cat startup.log; exit 1; }
+          echo stop >&3
+          wait "$SERVER_PID"
+          trap - EXIT
+      - name: Compile isolated module and run all unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./InvSee++_Folia/build-against-runtime.sh             "$PWD/.ci/folia" "$PWD/.ci/junit-console.jar" "$PWD/.ci/annotations.jar"
+      - name: Retain plugin and verification evidence only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: invsee-folia-${{ matrix.minecraft }}-build-${{ matrix.build }}-experimental
+          retention-days: 3
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            InvSee++_Folia/target/InvSee++-Folia.jar
+            InvSee++_Folia/target/runtime-build/tests.log
+            InvSee++_Folia/target/runtime-build/*sha256.txt
+            InvSee++_Folia/target/runtime-build/java-version.txt
+            .ci/folia/startup.log

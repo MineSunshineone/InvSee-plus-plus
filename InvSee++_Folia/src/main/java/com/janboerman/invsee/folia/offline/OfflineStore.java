@@ -1,0 +1,377 @@
+package com.janboerman.invsee.folia.offline;
+
+import com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent;
+import net.kyori.adventure.text.Component;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.nbt.CompoundTag;
+import org.bukkit.craftbukkit.CraftRegistry;
+import org.bukkit.craftbukkit.CraftServer;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+
+/** Offline sessions contain bytes/tags only. No fake players, world reads, or region waits. */
+public final class OfflineStore implements Listener, AutoCloseable {
+    private final OfflineAccessCoordinator fence = new OfflineAccessCoordinator();
+    private final Map<UUID, OfflineAccessCoordinator.Token> logins = new ConcurrentHashMap<>();
+    private final Map<AsyncPlayerPreLoginEvent, OfflineAccessCoordinator.Token> admissions = new ConcurrentHashMap<>();
+    private final Set<UUID> recoveryBlocked = ConcurrentHashMap.newKeySet();
+    private final Set<Lease> leases = ConcurrentHashMap.newKeySet();
+    private final Semaphore pending = new Semaphore(128);
+    private final ThreadPoolExecutor io = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(128), runnable -> {
+                Thread thread = new Thread(runnable, "InvSee-Folia-offline-io");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
+    private final Path directory;
+    private final RegistryAccess registries;
+    private volatile boolean closed;
+
+    /** Construct during initial plugin enable, before accepting connections. Hot reload is unsupported. */
+    public OfflineStore(JavaPlugin plugin) throws IOException {
+        directory = ((CraftServer) plugin.getServer()).getHandle().playerIo.getPlayerDir().toPath();
+        registries = CraftRegistry.getMinecraftRegistry();
+        // Recoveries are quarantined BEFORE registering admission, not discovered after a login starts.
+        if (Files.isDirectory(directory)) {
+            try (var files = Files.list(directory)) {
+                files.map(path -> path.getFileName().toString()).filter(name -> name.endsWith(".dat.invsee-transaction")).forEach(name -> {
+                    try { recoveryBlocked.add(UUID.fromString(name.substring(0, name.length() - ".dat.invsee-transaction".length()))); }
+                    catch (IllegalArgumentException ignored) { /* not one of our UUID paths */ }
+                });
+            }
+        }
+        // References/UUID enumeration only; no live player inventory or entity state is accessed.
+        plugin.getServer().getOnlinePlayers().forEach(player -> {
+            UUID id = player.getUniqueId();
+            OfflineAccessCoordinator.Token token = fence.tryLogin(id);
+            if (token != null) logins.put(id, token);
+        });
+        plugin.getServer().getPluginManager().registerEvents(this, plugin);
+    }
+
+    public CompletableFuture<Lease> open(UUID id) {
+        if (closed || recoveryBlocked.contains(id)) return CompletableFuture.failedFuture(new IOException("Offline data is closed or awaiting recovery"));
+        OfflineAccessCoordinator.Token token = fence.tryOffline(id);
+        if (token == null) return CompletableFuture.failedFuture(new IOException("Player is online, connecting, or already being edited"));
+        Lease lease = new Lease(id, token);
+        leases.add(lease);
+        lease.initializeLoginHandoff();
+        CompletableFuture<Lease> result = lease.submit(() -> {
+            Path file = lease.file();
+            if (AtomicPlayerDataFile.needsRecovery(file)) {
+                recoveryBlocked.add(id);
+                throw new IOException("Unresolved offline transaction: " + AtomicPlayerDataFile.journal(file));
+            }
+            lease.codec.decode(AtomicPlayerDataFile.read(file)); // reject unknown, corrupt, or incompatible data early
+            return lease;
+        });
+        result.whenComplete((value, error) -> { if (error != null || result.isCancelled()) lease.close(); });
+        return result;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPreLogin(AsyncPlayerPreLoginEvent event) {
+        if (event.getLoginResult() != AsyncPlayerPreLoginEvent.Result.ALLOWED) return;
+        OfflineAccessCoordinator.Token token = awaitLoginAdmission(event);
+        if (token == null) return;
+        admissions.put(event, token);
+        logins.put(token.playerId(), token);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPreLoginFinished(AsyncPlayerPreLoginEvent event) {
+        OfflineAccessCoordinator.Token token = admissions.remove(event);
+        if (token != null && !token.playerId().equals(event.getUniqueId())) {
+            // A later HIGHEST profile listener may replace the UUID. Never allow the server to
+            // consume data under an identity other than the one fenced by this admission.
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("Login identity changed during inventory admission. Please retry."));
+        }
+        if (token != null && event.getLoginResult() != AsyncPlayerPreLoginEvent.Result.ALLOWED) {
+            // Cancelled prelogin produces NO close event; use the ORIGINAL token identity.
+            logins.remove(token.playerId(), token);
+            token.close();
+        } else if (token == null && event.getLoginResult() == AsyncPlayerPreLoginEvent.Result.ALLOWED) {
+            // Another HIGHEST listener re-allowed an earlier denial, or allowed an initially denied
+            // event. It must still obtain a fence. No inventory admission bypass is permitted.
+            OfflineAccessCoordinator.Token late = awaitLoginAdmission(event);
+            if (late != null) logins.put(late.playerId(), late);
+        }
+    }
+
+    /** Only the dedicated asynchronous authentication worker may await a player-data handoff. */
+    private OfflineAccessCoordinator.Token awaitLoginAdmission(AsyncPlayerPreLoginEvent event) {
+        if (event.getUniqueId() == null || !event.isAsynchronous()
+                || org.bukkit.Bukkit.isPrimaryThread()) {
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("Cannot safely synchronize login data on this thread."));
+            return null;
+        }
+        OfflineAccessCoordinator.LoginRequest request = fence.requestLogin(event.getUniqueId());
+        try {
+            OfflineAccessCoordinator.Token token = request.ready().get(15, TimeUnit.SECONDS);
+            // A live commit may have been pending when login arrived; check quarantine only AFTER
+            // its pinned protocol and acknowledgement have drained, not during normal persistence.
+            if (recoveryBlocked.contains(token.playerId())) {
+                request.cancel();
+                event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("Inventory recovery is required after a persistence failure. Please contact an administrator."));
+                return null;
+            }
+            return token;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            request.cancel();
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("Login synchronization was interrupted; inventory data remains protected."));
+        } catch (java.util.concurrent.TimeoutException ex) {
+            request.cancel();
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("Inventory synchronization timed out. Data remains protected; please contact an administrator."));
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.CancellationException ex) {
+            request.cancel();
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text("Another login is active or the server is shutting down."));
+        }
+        return null;
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onConnectionClose(PlayerConnectionCloseEvent event) {
+        // Exact 26.2 server ordering: onDisconnect -> PlayerList.remove -> save -> connection-close.
+        // PlayerQuitEvent is too early and deliberately not used here.
+        OfflineAccessCoordinator.Token token = logins.remove(event.getPlayerUniqueId());
+        if (token != null) token.close();
+    }
+
+    /**
+     * Read-only confirmation for an online owner-thread save. It does not acquire an offline lease,
+     * rewrite player data, or touch a live player. Failure is an indeterminate transfer, not rollback.
+     */
+    public CompletableFuture<Void> verifySavedSlot(UUID id, boolean ender, int slot, byte[] expected) {
+        byte[] copy = expected == null ? null : expected.clone();
+        if (closed || !pending.tryAcquire()) return CompletableFuture.failedFuture(new IOException("Offline IO closed or busy"));
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            io.execute(() -> {
+                try {
+                    Path file = directory.resolve(id + ".dat");
+                    NbtInventoryCodec codec = new NbtInventoryCodec(registries);
+                    byte[] forcedSnapshot = AtomicPlayerDataFile.readForcedSnapshot(file);
+                    if (!codec.matches(codec.decode(forcedSnapshot), ender, slot, copy)) throw new IOException("Native player save did not persist the committed slot");
+                    result.complete(null);
+                } catch (Throwable ex) { result.completeExceptionally(ex); }
+                finally { pending.release(); }
+            });
+        } catch (RuntimeException ex) { pending.release(); result.completeExceptionally(ex); }
+        return result;
+    }
+
+    /** Read-only durability confirmation of an owner-thread whole-inventory administrative patch. */
+    public CompletableFuture<Void> verifySavedContents(UUID id, boolean ender, byte[][] expected) {
+        final byte[][] copy;
+        try { copy = copyContents(ender, expected); }
+        catch (IllegalArgumentException ex) { return CompletableFuture.failedFuture(ex); }
+        if (closed || !pending.tryAcquire()) return CompletableFuture.failedFuture(new IOException("Offline IO closed or busy"));
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            io.execute(() -> {
+                try {
+                    Path file = directory.resolve(id + ".dat");
+                    NbtInventoryCodec codec = new NbtInventoryCodec(registries);
+                    CompoundTag root = codec.decode(AtomicPlayerDataFile.readForcedSnapshot(file));
+                    for (int slot = 0; slot < copy.length; slot++) {
+                        if (!codec.matches(root, ender, slot, copy[slot])) throw new IOException("Native player save did not persist inventory slot " + slot);
+                    }
+                    result.complete(null);
+                } catch (Throwable ex) { result.completeExceptionally(ex); }
+                finally { pending.release(); }
+            });
+        } catch (RuntimeException ex) { pending.release(); result.completeExceptionally(ex); }
+        return result;
+    }
+
+    private static byte[][] copyContents(boolean ender, byte[][] contents) {
+        int size = ender ? 27 : 43;
+        if (contents == null || contents.length != size) throw new IllegalArgumentException("Expected exactly " + size + " inventory slots");
+        byte[][] result = new byte[size][];
+        for (int slot = 0; slot < size; slot++) result[slot] = contents[slot] == null ? null : contents[slot].clone();
+        return result;
+    }
+
+    /**
+     * Shutdown-only IO barrier: no owner-region task is awaited. Must return only after every writer
+     * stops, before Bukkit unregisters the pre-login fence. Do not call during normal gameplay.
+     */
+    @Override public void close() {
+        closed = true;
+        fence.close();
+        leases.forEach(Lease::close);
+        if (leases.isEmpty()) io.shutdown();
+        boolean interrupted = false;
+        for (;;) {
+            try { if (io.awaitTermination(1, TimeUnit.SECONDS)) break; }
+            catch (InterruptedException ex) { interrupted = true; }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
+    }
+
+    public final class Lease implements AutoCloseable {
+        private final UUID id;
+        private final OfflineAccessCoordinator.Token token;
+        private final NbtInventoryCodec codec = new NbtInventoryCodec(registries);
+        private CompletableFuture<Void> tail = CompletableFuture.completedFuture(null);
+        private boolean closing;
+        private int transactions;
+        private boolean releaseStarted;
+        private final CompletableFuture<Void> loginSignal = new CompletableFuture<>();
+        private final CompletableFuture<Void> released = new CompletableFuture<>();
+        private int count;
+        private Lease(UUID id, OfflineAccessCoordinator.Token token) { this.id = id; this.token = token; }
+        private void initializeLoginHandoff() {
+            token.loginRequested().thenRun(() -> {
+                synchronized (Lease.this) { closing = true; }
+                // Session callbacks take their own locks. Complete only outside the lease monitor.
+                loginSignal.complete(null);
+                releaseIfDrained();
+            });
+        }
+        public CompletableFuture<Void> loginRequested() { return loginSignal.copy(); }
+        public boolean isLoginRequested() { return token.isLoginRequested(); }
+        /** Admit a complete protocol BEFORE preparing its journal or reserving any source items. */
+        public synchronized Transaction beginTransaction() {
+            if (closing || closed || token.isLoginRequested() || releaseStarted) throw new IllegalStateException("Offline access yielded to player login");
+            transactions++;
+            return new Transaction();
+        }
+        public final class Transaction implements AutoCloseable {
+            private boolean done;
+            private Transaction() {}
+            @Override public void close() {
+                synchronized (Lease.this) {
+                    if (done) return;
+                    done = true;
+                    transactions--;
+                }
+                releaseIfDrained();
+            }
+        }
+        public UUID playerId() { return id; }
+        private Path file() { return directory.resolve(id + ".dat"); }
+
+        public CompletableFuture<byte[][]> read(boolean ender) {
+            return submit(() -> codec.read(codec.decode(AtomicPlayerDataFile.read(file())), ender));
+        }
+        public CompletableFuture<Boolean> compareAndSet(boolean ender, int slot, byte[] expected, byte[] replacement) {
+            byte[] beforeItem = expected == null ? null : expected.clone();
+            byte[] afterItem = replacement == null ? null : replacement.clone();
+            return submit(() -> {
+                byte[] before = AtomicPlayerDataFile.read(file());
+                CompoundTag root = codec.decode(before);
+                if (!codec.matches(root, ender, slot, beforeItem)) return false;
+                codec.replace(root, ender, slot, afterItem);
+                try {
+                    AtomicPlayerDataFile.replace(file(), before, NbtInventoryCodec.compress(root));
+                    recoveryBlocked.add(id); // keep login fenced until durable transfer acknowledgement
+                } catch (IOException ex) {
+                    if (AtomicPlayerDataFile.needsRecovery(file())) recoveryBlocked.add(id);
+                    throw ex;
+                }
+                return true;
+            }, true);
+        }
+        /**
+         * All-or-nothing administrative patch of the managed inventory, with one file transaction.
+         * All expected slots must match before any replacement is persisted. The other inventory
+         * kind and unrelated NBT remain untouched. The caller must durably journal then acknowledge.
+         */
+        public CompletableFuture<Boolean> compareAndSetContents(boolean ender, byte[][] expected, byte[][] replacement) {
+            final byte[][] beforeItems, afterItems;
+            try {
+                beforeItems = copyContents(ender, expected);
+                afterItems = copyContents(ender, replacement);
+            } catch (IllegalArgumentException ex) { return CompletableFuture.failedFuture(ex); }
+            return submit(() -> {
+                byte[] before = AtomicPlayerDataFile.read(file());
+                CompoundTag root = codec.decode(before);
+                for (int slot = 0; slot < beforeItems.length; slot++) {
+                    if (!codec.matches(root, ender, slot, beforeItems[slot])) return false;
+                }
+                for (int slot = 0; slot < afterItems.length; slot++) {
+                    // Preserve even unknown per-item tag fields for slots that do not change.
+                    if (!codec.matches(root, ender, slot, afterItems[slot])) codec.replace(root, ender, slot, afterItems[slot]);
+                }
+                try {
+                    AtomicPlayerDataFile.replace(file(), before, NbtInventoryCodec.compress(root));
+                    recoveryBlocked.add(id);
+                } catch (IOException ex) {
+                    if (AtomicPlayerDataFile.needsRecovery(file())) recoveryBlocked.add(id);
+                    throw ex;
+                }
+                return true;
+            }, true);
+        }
+        public CompletableFuture<Void> acknowledgeCommit() {
+            return submit(() -> {
+                AtomicPlayerDataFile.acknowledge(file());
+                recoveryBlocked.remove(id);
+                return null;
+            }, true);
+        }
+        private <T> CompletableFuture<T> submit(IoTask<T> operation) { return submit(operation, false); }
+        private synchronized <T> CompletableFuture<T> submit(IoTask<T> operation, boolean mutation) {
+            if ((closing && transactions == 0) || releaseStarted || closed || (mutation && transactions == 0)
+                    || count >= 16 || !pending.tryAcquire()) return CompletableFuture.failedFuture(new IOException("Offline IO is closed, unpinned, or busy"));
+            count++;
+            CompletableFuture<T> result = new CompletableFuture<>();
+            CompletableFuture<Void> previous = tail;
+            CompletableFuture<Void> next = new CompletableFuture<>();
+            tail = next;
+            previous.whenComplete((ignored, previousError) -> {
+                try {
+                    io.execute(() -> {
+                        try { result.complete(operation.run()); }
+                        catch (Throwable ex) { result.completeExceptionally(ex); }
+                        finally { finished(next); }
+                    });
+                } catch (RuntimeException rejected) {
+                    result.completeExceptionally(rejected);
+                    finished(next);
+                }
+            });
+            return result;
+        }
+        private void finished(CompletableFuture<Void> next) {
+            synchronized (this) { count--; pending.release(); }
+            next.complete(null);
+            releaseIfDrained();
+        }
+        @Override public void close() {
+            synchronized (this) { closing = true; }
+            releaseIfDrained();
+        }
+        /** Completes after the full pinned protocol and accepted IO have drained. */
+        public CompletableFuture<Void> closeAsync() { close(); return released.copy(); }
+        private void releaseIfDrained() {
+            synchronized (this) {
+                if (!closing || transactions != 0 || count != 0 || releaseStarted) return;
+                releaseStarted = true;
+            }
+            leases.remove(this);
+            token.close();
+            released.complete(null);
+            if (closed && leases.isEmpty()) io.shutdown();
+        }
+    }
+    @FunctionalInterface private interface IoTask<T> { T run() throws Exception; }
+}

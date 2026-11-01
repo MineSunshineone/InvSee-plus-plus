@@ -1,0 +1,33 @@
+name: InvSeeLiveOwnerProbe
+version: 0.1
+main: harness.LiveOwnerProbe
+api-version: '26.2'
+folia-supported: true
+commands:
+  ownerprobe:
+    description: Console only - three disposable connected players in distinct regions, empty slot 0
+    usage: ownerprobe playerA playerB playerC
+  codeccheck:
+    description: Console-only initialized-server offline codec acceptance check
+    usage: codeccheck
+  probepermission:
+    description: Console-only disposable player permission test attachment
+    usage: probepermission player node true-or-false
+  probedisable:
+    description: Console-only disable production plugin for isolated stale-menu test
+    usage: probedisable
+  equipmentcheck:
+    description: Console-only native equipment component runtime checks
+    usage: equipmentcheck
+  probeseed:
+    description: Create three metadata fixture diamonds in disposable empty slot9, console only
+    usage: probeseed player
+  phaseguard:
+    description: Bounded isolated journal-delay permission-revocation check, console only
+    usage: phaseguard player permission
+  plannercheck:
+    description: Native detached snapshot planner checks, console only
+    usage: plannercheck
+  journalhold:
+    description: Bounded isolated journal-queue delay for login drain tests, console only
+    usage: journalhold
